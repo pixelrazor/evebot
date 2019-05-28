@@ -87,6 +87,9 @@ var (
 		"453643015467171851", // Admin
 		"222406937768099840", // Moderator
 	}
+	permanentRoles = map[string][]string{
+		"486817299781648385": {"519753627120828428"},
+	}
 )
 
 type img struct {
@@ -163,8 +166,21 @@ func onReady(s *discordgo.Session, r *discordgo.Ready) {
 			return nil
 		})
 	})
+	applyRoles(s)
 	fmt.Println("---------\nwe up\n---------")
 }
+
+func applyRoles(s *discordgo.Session) {
+	for user, roles := range permanentRoles {
+		for _, role := range roles {
+			err := s.GuildMemberRoleAdd(guildID, user, role)
+			if err != nil {
+				fmt.Println("allpyRoles:", user, role, err)
+			}
+		}
+	}
+}
+
 func initDB() {
 	var err error
 	db, err = bolt.Open("eve.db", 0666, nil)
@@ -641,6 +657,7 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 		}
 		return nil
 	})
+	applyRoles(s)
 	invitesLock.Lock()
 	ginvites, _ := dg.GuildInvites(guildID)
 	newInvs := make([]invite, len(ginvites))
@@ -682,6 +699,7 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 		}
 	}
 	s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
+
 }
 func getPNG() string {
 	files, _ := ioutil.ReadDir("./")
