@@ -88,7 +88,7 @@ var (
 		"222406937768099840", // Moderator
 	}
 	permanentRoles = map[string][]string{
-		"486817299781648385": {"519753627120828428"},
+		//"486817299781648385": {"519753627120828428"},
 	}
 )
 
@@ -123,6 +123,7 @@ func main() {
 	dg.AddHandler(messageDelete)
 	dg.AddHandler(presenceUpdate)
 	dg.AddHandler(onReady)
+	dg.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages)
 	if err := dg.Open(); err != nil {
 		panic(err)
 	}
@@ -167,7 +168,7 @@ func onReady(s *discordgo.Session, r *discordgo.Ready) {
 		})
 	})
 	applyRoles(s)
-	fmt.Println("---------\nwe up\n---------")
+	fmt.Println("we up")
 }
 
 func applyRoles(s *discordgo.Session) {
@@ -281,20 +282,26 @@ func mute(s *discordgo.Session, u string, d time.Duration) {
 }
 func refreshInvites() {
 	for {
-		invitesLock.Lock()
-		ginvites, _ := dg.GuildInvites(guildID)
-		newInvs := make([]invite, len(ginvites))
-		for i := range ginvites {
-			newInvs[i].code = ginvites[i].Code
-			if ginvites[i].Inviter != nil {
-				newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
-				newInvs[i].name = ginvites[i].Inviter.Username
-				newInvs[i].id = ginvites[i].Inviter.ID
+		func() {
+			invitesLock.Lock()
+			defer invitesLock.Unlock()
+			ginvites, err := dg.GuildInvites(guildID)
+			if err != nil {
+				fmt.Println("Error getting invites:", err)
+				return
 			}
-			newInvs[i].uses = ginvites[i].Uses
-		}
-		invites = newInvs
-		invitesLock.Unlock()
+			newInvs := make([]invite, len(ginvites))
+			for i := range ginvites {
+				newInvs[i].code = ginvites[i].Code
+				if ginvites[i].Inviter != nil {
+					newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
+					newInvs[i].name = ginvites[i].Inviter.Username
+					newInvs[i].id = ginvites[i].Inviter.ID
+				}
+				newInvs[i].uses = ginvites[i].Uses
+			}
+			invites = newInvs
+		}()
 		<-time.After(10 * time.Minute)
 	}
 }
@@ -380,6 +387,9 @@ func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{"Nickname", member.Nick, true})
 	}
 	_, err = s.ChannelMessageSendEmbed(channel, embed)
+	if err != nil {
+		fmt.Println("Error sending uinfo message:", err)
+	}
 }
 
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -413,7 +423,16 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	if hasEgg, _ := regexp.MatchString("(?i)\\beggs?\\b", m.Content); hasEgg || strings.Contains(m.Content, "🥚") {
-		s.ChannelMessageSend(m.ChannelID, "🥚")
+		_, err := s.ChannelMessageSend(m.ChannelID, "🥚")
+		if err != nil {
+			fmt.Println("Error sending egg message:", err)
+		}
+	}
+	if lmode, _ := regexp.MatchString("(?i)light (mode|theme)", m.Content); lmode {
+		_, err := s.ChannelMessageSend(m.ChannelID, "It's better in the dark")
+		if err != nil {
+			fmt.Println("Error sending light mode message:", err)
+		}
 	}
 	args := strings.Fields(m.Content)
 	if len(args) > 0 {
@@ -635,13 +654,18 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 }
 func memberLeave(s *discordgo.Session, gmr *discordgo.GuildMemberRemove) {
+	fmt.Println("Member leave:", gmr.Member.Mention(), gmr.GuildID)
 	if gmr.GuildID != guildID {
 		return
 	}
 	go incrementLeave()
-	s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
+	_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
+	if err != nil {
+		fmt.Println("Error sending member leave message:", err)
+	}
 }
 func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
+	fmt.Println("Member join:", gma.Member.Mention(), gma.GuildID)
 	if gma.GuildID != guildID {
 		return
 	}
@@ -659,6 +683,7 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 	})
 	applyRoles(s)
 	invitesLock.Lock()
+	defer invitesLock.Unlock()
 	ginvites, _ := dg.GuildInvites(guildID)
 	newInvs := make([]invite, len(ginvites))
 	for i := range ginvites {
@@ -674,11 +699,13 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 		}
 		newInvs[i].uses = ginvites[i].Uses
 	}
-	defer invitesLock.Unlock()
 	for _, new := range newInvs {
 		for _, old := range invites {
 			if old.code == new.code && old.uses+1 == new.uses {
-				s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
+				_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
+				if err != nil {
+					fmt.Println("Error sending member join message:", err)
+				}
 				invites = newInvs
 				return
 			}
@@ -693,12 +720,18 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 			}
 		}
 		if !found {
-			s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
+			_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
+			if err != nil {
+				fmt.Println("Error sending member join message:", err)
+			}
 			invites = newInvs
 			return
 		}
 	}
-	s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
+	_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
+	if err != nil {
+		fmt.Println("Error sending member join message:", err)
+	}
 
 }
 func getPNG() string {
