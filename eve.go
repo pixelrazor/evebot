@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/png"
 	"io/ioutil"
+	"log"
 	"math/rand"
 	"net/http"
 	"os"
@@ -130,7 +131,7 @@ func main() {
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sig
-	fmt.Println("peace out")
+	log.Println("peace out")
 	db.Close()
 }
 func onReady(s *discordgo.Session, r *discordgo.Ready) {
@@ -141,12 +142,6 @@ func onReady(s *discordgo.Session, r *discordgo.Ready) {
 		}
 	}()
 	go refreshInvites()
-	/*go func() {
-		for {
-			<-time.After(24 * time.Hour)
-			changeServerIcon()
-		}
-	}()*/
 	db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("muted"))
 		return b.ForEach(func(k, v []byte) error {
@@ -154,7 +149,7 @@ func onReady(s *discordgo.Session, r *discordgo.Ready) {
 			var t time.Time
 			err := t.GobDecode(v)
 			if err != nil {
-				fmt.Println("time.GobDecode err:", err)
+				log.Println("time.GobDecode err:", err)
 			} else {
 				now := time.Now()
 				if now.Before(t) {
@@ -168,7 +163,7 @@ func onReady(s *discordgo.Session, r *discordgo.Ready) {
 		})
 	})
 	applyRoles(s)
-	fmt.Println("we up")
+	log.Println("we up")
 }
 
 func applyRoles(s *discordgo.Session) {
@@ -176,7 +171,7 @@ func applyRoles(s *discordgo.Session) {
 		for _, role := range roles {
 			err := s.GuildMemberRoleAdd(guildID, user, role)
 			if err != nil {
-				fmt.Println("allpyRoles:", user, role, err)
+				log.Println("applyRoles error:", user, role, err)
 			}
 		}
 	}
@@ -238,8 +233,13 @@ func incrementLeave() {
 	})
 }
 func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
+	member, err := s.GuildMember(p.GuildID, p.User.ID)
+	if err != nil {
+		log.Println("Error getting member for presence update:", err)
+		return
+	}
 	isStreamer := false
-	for _, v := range p.Roles {
+	for _, v := range member.Roles {
 		if v == streamerRole {
 			isStreamer = true
 			break
@@ -248,19 +248,27 @@ func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 	if !isStreamer {
 		return
 	}
-	// attempt to filter out multiple presence updates that may happen after stream has started
-	if p.Game != nil && p.Game.Type == discordgo.GameTypeStreaming {
-		if isStreaming[p.User.ID] == (time.Time{}) || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
-			mesg := p.Game.Name + "\n"
-			s.ChannelMessageSend(streamChannel, mesg+p.Game.URL)
+
+	for _, activity := range p.Activities {
+		if activity.Type == discordgo.ActivityTypeStreaming { // p.Game != nil  do i need this?
+			if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
+				mesg := activity.Name + "\n"
+				_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
+				if err != nil {
+					log.Println("Error sending stream message:", err)
+				}
+			}
+			isStreaming[p.User.ID] = time.Now()
+			break
 		}
-		isStreaming[p.User.ID] = time.Now()
 	}
 }
+
 func muteMember(s *discordgo.Session, u, c string, d time.Duration) {
 	s.GuildMemberRoleAdd(guildID, u, muteRole)
 	go mute(s, u, d)
 }
+
 func mute(s *discordgo.Session, u string, d time.Duration) {
 	db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket([]byte("muted"))
@@ -546,20 +554,47 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
 				return
 			}
-			if len(m.Mentions) == 0 {
-				s.ChannelMessageSend(m.ChannelID, "Error: need to mention user to mute (.mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
+			if len(args) != 3 {
+				s.ChannelMessageSend(m.ChannelID, "Error: need 2 arguments (?mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
 				return
 			}
-			if len(args) != 3 {
-				s.ChannelMessageSend(m.ChannelID, "Error: need 2 arguments (.mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
-				return
+			id := args[1]
+			if len(m.Mentions) > 0 {
+				id = m.Mentions[0].ID
 			}
 			t, err := time.ParseDuration(args[2])
 			if err != nil {
-				s.ChannelMessageSend(m.ChannelID, "Error: invalid duration (.mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
+				s.ChannelMessageSend(m.ChannelID, "Error: invalid duration (?mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
 				return
 			}
-			muteMember(s, m.Mentions[0].ID, m.ChannelID, t)
+			muteMember(s, id, m.ChannelID, t)
+		case "?unmute":
+			mem, _ := s.GuildMember(guildID, m.Author.ID)
+			isAdmin := false
+			for _, v := range mem.Roles {
+				if v == adminRole || v == modRole {
+					isAdmin = true
+					break
+				}
+			}
+			if !isAdmin {
+				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
+				return
+			}
+			if len(args) != 2 {
+				s.ChannelMessageSend(m.ChannelID, "Error: need 1 argument (?unmute @user)")
+				return
+			}
+			id := args[1]
+			if len(m.Mentions) > 0 {
+				id = m.Mentions[0].ID
+			}
+			s.GuildMemberRoleRemove(guildID, id, muteRole)
+			db.Update(func(tx *bolt.Tx) error {
+				b := tx.Bucket([]byte("muted"))
+				b.Delete([]byte(id))
+				return nil
+			})
 		case "?uinfo":
 			if len(m.Mentions) == 0 {
 				uinfo(m.Author, m.ChannelID, m.GuildID, s)
@@ -757,7 +792,9 @@ func changeBotIcon() {
 	if err != nil {
 		fmt.Println("Error updating bot icon:")
 	}
-	dg.UpdateStatus(0, quotes[random.Int63()%int64(len(quotes))])
+	dg.UpdateStatusComplex(discordgo.UpdateStatusData{
+		Status: quotes[random.Int63()%int64(len(quotes))],
+	})
 }
 func changeServerIcon() {
 	_, err := dg.GuildEdit(guildID, discordgo.GuildParams{Icon: getPNG()})
