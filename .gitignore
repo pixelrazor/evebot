@@ -1,3 +1,4 @@
 eve.db*
 eve_bot
 *.exe
+.vscode
