@@ -117,7 +117,7 @@ func main() {
 		})
 		err := rdb.Ping(ctx).Err()
 		if err != nil {
-			log.Fatalln("Failed to ping redis instance:", err)
+			log.Fatalln("Failed to ping redis instance:", envRedis, err)
 		}
 		repo = NewRedisRepo(rdb)
 		defer rdb.Close()
