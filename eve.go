@@ -3,8 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/base64"
-	"encoding/binary"
-	"errors"
+	"flag"
 	"fmt"
 	"image"
 	"image/png"
@@ -15,13 +14,13 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
-	"strconv"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
-	"github.com/boltdb/bolt"
+	"github.com/go-redis/redis/v8"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -46,48 +45,29 @@ var (
 		"Let Evelynn Bot take over",
 		"Laying eggs",
 	}
-	guildID       = "222402041618628608"
-	babyChannel   = "456120170017194016"
-	streamChannel = "329093986482651138"
-	partyChannel  = "519668633316753411"
-	trashCan      = "473964707284254730"
+	guildID       = "222402041618628608" // TODO: enforce this bot is only ever in this guild?
+	babyChannel   = "456120170017194016" // for people that join/leave
+	streamChannel = "329093986482651138" // where streamer updates get posted
+	partyChannel  = "519668633316753411" // admin bot channel
+	trashCan      = "473964707284254730" // place to post deleted messages
 	muteRole      = "282710021559549952"
 	adminRole     = "453643015467171851"
 	modRole       = "222406937768099840"
 	streamerRole  = "328636992999129088"
 	embedColor    = 0x8031ce
-	dg            *discordgo.Session
-	invites       []invite
-	invitesLock   sync.Mutex
+	dg            *discordgo.Session // TODO: remove this global
+
+	invites     []invite
+	invitesLock sync.Mutex
+
 	pastMessages  [64]*messageBackup
 	pastMesgIndex = 0
-	isStreaming   = make(map[string]time.Time)
-	db            *bolt.DB
-	rolesToCount  = []string{
-		"462045631796609044", // bronze
-		"462045629615702016", // silver
-		"462045627719745546", // gold
-		"462045623852728321", // plat
-		"462045622191652864", // diamond
-		"462045619083804685", // master
-		"462045617661673483", // challenger
-		"462045652407418880", // na
-		"462045650456936468", // EUNE
-		"462045654252912640", // EUW
-		"462045645537017866", // JP
-		"462045633470267395", // TR
-		"462045637123506186", // OCE
-		"462045635269492736", // RU
-		"462045641221341184", // LAN
-		"462045639270727690", // LAS
-		"462045643473551363", // KR
-		"281773382650036235", // Coach
-		"494134797044678657", // Head Coach
-		"471016108141314048", // Retired Coach
-		"474160195145302027", // Owner
-		"453643015467171851", // Admin
-		"222406937768099840", // Moderator
-	}
+
+	isStreaming = make(map[string]time.Time)
+
+	// permanentRoles holds member IDs mapped to a list of roles they should have. These roles are
+	// applied if they rejoin the server
+	// TODO: create admin api to manage this
 	permanentRoles = map[string][]string{
 		//"486817299781648385": {"519753627120828428"},
 	}
@@ -114,9 +94,35 @@ type messageBackup struct {
 	attachments []*discordgo.File
 }
 
+var repo DataRepository
+
 func main() {
-	initDB()
-	key := "Bot " + os.Getenv("EVE_BOT")
+	memdb := flag.Bool("memdb", false, "Specifying this flag uses an in memory repository instead of redis")
+	flag.Parse()
+	envKey, ok := os.LookupEnv("EVE_BOT")
+	if !ok {
+		log.Fatalln("Failed to find EVE_BOT in env")
+	}
+	if *memdb {
+		fmt.Println("memory")
+		repo = NewMemoryRepo()
+	} else {
+		envRedis, ok := os.LookupEnv("REDIS_HOST")
+		if !ok {
+			log.Fatalln("Failed to find REDIS_HOST in env")
+		}
+		rdb := redis.NewClient(&redis.Options{
+			Addr: envRedis,
+			DB:   0,
+		})
+		err := rdb.Ping(ctx).Err()
+		if err != nil {
+			log.Fatalln("Failed to ping redis instance:", err)
+		}
+		repo = NewRedisRepo(rdb)
+		defer rdb.Close()
+	}
+	key := "Bot " + envKey
 	dg, _ = discordgo.New(key)
 	dg.AddHandler(memberJoin)
 	dg.AddHandler(memberLeave)
@@ -128,12 +134,14 @@ func main() {
 	if err := dg.Open(); err != nil {
 		panic(err)
 	}
+
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sig
+
 	log.Println("peace out")
-	db.Close()
 }
+
 func onReady(s *discordgo.Session, r *discordgo.Ready) {
 	go func() {
 		for {
@@ -142,32 +150,16 @@ func onReady(s *discordgo.Session, r *discordgo.Ready) {
 		}
 	}()
 	go refreshInvites()
-	db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("muted"))
-		return b.ForEach(func(k, v []byte) error {
-			id := string(k)
-			var t time.Time
-			err := t.GobDecode(v)
-			if err != nil {
-				log.Println("time.GobDecode err:", err)
-			} else {
-				now := time.Now()
-				if now.Before(t) {
-					go mute(s, id, t.Sub(now))
-				} else {
-					s.GuildMemberRoleRemove(guildID, string(k), muteRole)
-					b.Delete(k)
-				}
-			}
-			return nil
-		})
-	})
-	applyRoles(s)
+	muted := repo.GetAllMuted()
+	for member, mutedUntil := range muted {
+		go mute(s, member, mutedUntil.Sub(time.Now()))
+	}
+	applyRoles(s, permanentRoles)
 	log.Println("we up")
 }
 
-func applyRoles(s *discordgo.Session) {
-	for user, roles := range permanentRoles {
+func applyRoles(s *discordgo.Session, userRoles map[string][]string) {
+	for user, roles := range userRoles {
 		for _, role := range roles {
 			err := s.GuildMemberRoleAdd(guildID, user, role)
 			if err != nil {
@@ -177,61 +169,6 @@ func applyRoles(s *discordgo.Session) {
 	}
 }
 
-func initDB() {
-	var err error
-	db, err = bolt.Open("eve.db", 0666, nil)
-	if err != nil {
-		panic(err)
-	}
-	db.Update(func(tx *bolt.Tx) error {
-		tx.CreateBucketIfNotExists([]byte("leave"))
-		tx.CreateBucketIfNotExists([]byte("join"))
-		tx.CreateBucketIfNotExists([]byte("muted"))
-		return nil
-	})
-}
-func incrementJoin() {
-	db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("join"))
-		if b == nil {
-			return errors.New("Null bucket?")
-		}
-		key := []byte(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-		val := b.Get(key)
-		if len(val) == 0 {
-			val = make([]byte, 4)
-			binary.BigEndian.PutUint32(val, uint32(1))
-			b.Put(key, val)
-		} else {
-			current := binary.BigEndian.Uint32(val)
-			val = make([]byte, 4)
-			binary.BigEndian.PutUint32(val, uint32(current+1))
-			b.Put(key, val)
-		}
-		return nil
-	})
-}
-func incrementLeave() {
-	db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("leave"))
-		if b == nil {
-			return errors.New("Null bucket?")
-		}
-		key := []byte(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-		val := b.Get(key)
-		if len(val) == 0 {
-			val = make([]byte, 4)
-			binary.BigEndian.PutUint32(val, uint32(1))
-			b.Put(key, val)
-		} else {
-			current := binary.BigEndian.Uint32(val)
-			val = make([]byte, 4)
-			binary.BigEndian.PutUint32(val, uint32(current+1))
-			b.Put(key, val)
-		}
-		return nil
-	})
-}
 func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 	member, err := s.GuildMember(p.GuildID, p.User.ID)
 	if err != nil {
@@ -239,8 +176,8 @@ func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 		return
 	}
 	isStreamer := false
-	for _, v := range member.Roles {
-		if v == streamerRole {
+	for _, role := range member.Roles {
+		if role == streamerRole {
 			isStreamer = true
 			break
 		}
@@ -251,6 +188,7 @@ func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 
 	for _, activity := range p.Activities {
 		if activity.Type == discordgo.ActivityTypeStreaming { // p.Game != nil  do i need this?
+			log.Println("Presence info:", isStreaming[p.User.ID], activity)
 			if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
 				mesg := activity.Name + "\n"
 				_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
@@ -264,30 +202,22 @@ func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 	}
 }
 
-func muteMember(s *discordgo.Session, u, c string, d time.Duration) {
+// muteMember applies the muted role, then starts a time to remove the role after d elapses
+func muteMember(s *discordgo.Session, u string, d time.Duration) {
 	s.GuildMemberRoleAdd(guildID, u, muteRole)
 	go mute(s, u, d)
 }
 
 func mute(s *discordgo.Session, u string, d time.Duration) {
-	db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("muted"))
-		t, err := time.Now().Add(d).GobEncode()
-		if err != nil {
-			fmt.Println("gobencode error:", err)
-			return err
-		}
-		b.Put([]byte(u), t)
-		return nil
-	})
+	repo.AddMuted(u, time.Now().Add(d))
 	<-time.After(d)
-	s.GuildMemberRoleRemove(guildID, u, muteRole)
-	db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("muted"))
-		b.Delete([]byte(u))
-		return nil
-	})
+	err := s.GuildMemberRoleRemove(guildID, u, muteRole)
+	if err != nil {
+		log.Println("Failed to remove mute role:", u, err)
+	}
+	repo.DeleteMuted(u)
 }
+
 func refreshInvites() {
 	for {
 		func() {
@@ -313,10 +243,7 @@ func refreshInvites() {
 		<-time.After(10 * time.Minute)
 	}
 }
-func idToDate(s int64) time.Time {
-	const discordEpoch int64 = 1420070400000
-	return time.Unix(((s>>22)+discordEpoch)/1000, 0)
-}
+
 func messageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 	if m.GuildID != guildID {
 		return
@@ -347,12 +274,7 @@ func messageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 
 }
 func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
-	id, err := strconv.ParseInt(u.ID, 10, 64)
-	if err != nil {
-		fmt.Println("uinfo ParseInt:", err)
-		return
-	}
-	created := idToDate(id)
+	created, _ := discordgo.SnowflakeTimestamp(u.ID)
 	member, err := s.GuildMember(guild, u.ID)
 	if err != nil {
 		fmt.Println("uinfo GuildMember:", err)
@@ -460,87 +382,33 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
 				return
 			}
-			channel, _ := s.UserChannelCreate(m.Author.ID)
-			mesg := ""
-			db.View(func(tx *bolt.Tx) error {
-				mesg += fmt.Sprintf("%s:\n", "join")
-				tx.Bucket([]byte("join")).ForEach(func(k, v []byte) error {
-					mesg += fmt.Sprintf("   %s: %v\n", k, binary.BigEndian.Uint32(v))
-					return nil
-				})
-				mesg += fmt.Sprintf("%s:\n", "leave")
-				tx.Bucket([]byte("leave")).ForEach(func(k, v []byte) error {
-					mesg += fmt.Sprintf("   %s: %v\n", k, binary.BigEndian.Uint32(v))
-					return nil
-				})
-				mesg += fmt.Sprintf("%s:\n", "muted")
-				tx.Bucket([]byte("muted")).ForEach(func(k, v []byte) error {
-					var t time.Time
-					err := t.GobDecode(v)
-					if err != nil {
-						fmt.Println(".gb dobdecode err:", err)
-					}
-					mesg += fmt.Sprintf("   <@%s> %s: %v\n", k, k, time.Until(t).Truncate(time.Millisecond))
-					return nil
-				})
-				return nil
-			})
-			s.ChannelMessageSend(channel.ID, mesg)
-
-		case "?rolecount":
-			mem, _ := s.GuildMember(guildID, m.Author.ID)
-			isAdmin := false
-			for _, v := range mem.Roles {
-				if v == adminRole || v == modRole {
-					isAdmin = true
-					break
-				}
-			}
-			if !isAdmin {
-				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
+			channel, err := s.UserChannelCreate(m.Author.ID)
+			if err != nil {
+				log.Println("Failed to create DM channel:", m.Author.ID, err)
 				return
 			}
-			rolecount := make(map[string]int)
-			mems, err := s.GuildMembers(guildID, "", 1000)
-			for _, mem := range mems {
-				for _, v := range mem.Roles {
-					rolecount[v]++
-				}
-			}
-			for err != nil && len(mems) == 1000 {
-				mems, err = s.GuildMembers(guildID, mems[999].User.ID, 1000)
-				for _, mem := range mems {
-					for _, v := range mem.Roles {
-						rolecount[v]++
-					}
-				}
-			}
 
-			roleNames := make(map[string]string)
-			roles, _ := s.GuildRoles(guildID)
-			for _, v := range roles {
-				roleNames[v.ID] = v.Name
+			mesg := "```\n"
+			joined := repo.GetAllJoin()
+			leave := repo.GetAllLeave()
+			dates := make([]string, 0)
+			for k := range joined {
+				dates = append(dates, k)
 			}
-			roleList := make([]struct {
-				count int
-				name  string
-			}, len(rolesToCount))
-			for i := range rolesToCount {
-				roleList[i] = struct {
-					count int
-					name  string
-				}{rolecount[rolesToCount[i]], roleNames[rolesToCount[i]]}
+			sort.Strings(dates)
+			for _, date := range dates {
+				mesg += fmt.Sprintf("%v: +/- %v/%v\n", date, joined[date], leave[date])
 			}
-			mesg := ""
-			channel, _ := s.UserChannelCreate(m.Author.ID)
-			for _, v := range roleList {
-				mesg += fmt.Sprintf("%v: %v\n", v.name, v.count)
-				if len(mesg) > 1800 {
-					s.ChannelMessageSend(channel.ID, mesg)
-					mesg = ""
-				}
+			mesg += "```\n"
+			muted := repo.GetAllMuted()
+			for id, until := range muted {
+				mesg += fmt.Sprintf("<@%v> %v: %v\n", id, id, until)
 			}
-			s.ChannelMessageSend(channel.ID, mesg)
+			_, err = s.ChannelMessageSend(channel.ID, mesg)
+			if err != nil {
+				log.Println("Failed to send db dump:", err)
+				return
+			}
 		case "?mute":
 			mem, _ := s.GuildMember(guildID, m.Author.ID)
 			isAdmin := false
@@ -567,7 +435,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				s.ChannelMessageSend(m.ChannelID, "Error: invalid duration (?mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
 				return
 			}
-			muteMember(s, id, m.ChannelID, t)
+			muteMember(s, id, t)
 		case "?unmute":
 			mem, _ := s.GuildMember(guildID, m.Author.ID)
 			isAdmin := false
@@ -590,11 +458,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				id = m.Mentions[0].ID
 			}
 			s.GuildMemberRoleRemove(guildID, id, muteRole)
-			db.Update(func(tx *bolt.Tx) error {
-				b := tx.Bucket([]byte("muted"))
-				b.Delete([]byte(id))
-				return nil
-			})
+			repo.DeleteMuted(id)
 		case "?uinfo":
 			if len(m.Mentions) == 0 {
 				uinfo(m.Author, m.ChannelID, m.GuildID, s)
@@ -633,12 +497,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 					voice++
 				}
 			}
-			id, err := strconv.ParseInt(guild.ID, 10, 64)
-			if err != nil {
-				fmt.Println("sinfo ParseInt:", err)
-				return
-			}
-			created := idToDate(id)
+			created, _ := discordgo.SnowflakeTimestamp(guild.ID)
 			emojis := make([]string, 1)
 			for _, v := range guild.Emojis {
 				emoji := v.MessageFormat() + " "
@@ -693,7 +552,7 @@ func memberLeave(s *discordgo.Session, gmr *discordgo.GuildMemberRemove) {
 	if gmr.GuildID != guildID {
 		return
 	}
-	go incrementLeave()
+	repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
 	_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
 	if err != nil {
 		fmt.Println("Error sending member leave message:", err)
@@ -704,19 +563,14 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 	if gma.GuildID != guildID {
 		return
 	}
-	go incrementJoin()
-	db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket([]byte("muted"))
-		result := b.Get([]byte(gma.User.ID))
-		if result != nil {
-			var t time.Time
-			t.GobDecode(result)
-			s.ChannelMessageSend(partyChannel, fmt.Sprintf("%v (%v) is a punk ass mute evader (%v remaining)", gma.User.Mention(), gma.User.ID, time.Until(t)))
-			b.Delete([]byte(gma.User.ID))
-		}
-		return nil
-	})
-	applyRoles(s)
+	repo.IncrementJoin(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
+	until, err := repo.GetMuted(gma.User.ID)
+	if err == nil {
+		// TODO: reapply muted here
+		s.ChannelMessageSend(partyChannel, fmt.Sprintf("%v (%v) is a punk ass mute evader (%v remaining)", gma.User.Mention(), gma.User.ID, time.Until(until)))
+		repo.DeleteMuted(gma.User.ID)
+	}
+	applyRoles(s, permanentRoles)
 	invitesLock.Lock()
 	defer invitesLock.Unlock()
 	ginvites, _ := dg.GuildInvites(guildID)
@@ -763,7 +617,7 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 			return
 		}
 	}
-	_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
+	_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
 	if err != nil {
 		fmt.Println("Error sending member join message:", err)
 	}
@@ -796,6 +650,7 @@ func changeBotIcon() {
 		Status: quotes[random.Int63()%int64(len(quotes))],
 	})
 }
+
 func changeServerIcon() {
 	_, err := dg.GuildEdit(guildID, discordgo.GuildParams{Icon: getPNG()})
 	if err != nil {
