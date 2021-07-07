@@ -130,12 +130,12 @@ func main() {
 	dg.AddHandler(messageDelete)
 	dg.AddHandler(presenceUpdate)
 	dg.AddHandler(onReady)
-	dg.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages)
+	dg.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsGuildPresences)
 	if err := dg.Open(); err != nil {
 		panic(err)
 	}
 
-	sig := make(chan os.Signal)
+	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sig
 
@@ -548,7 +548,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 }
 func memberLeave(s *discordgo.Session, gmr *discordgo.GuildMemberRemove) {
-	fmt.Println("Member leave:", gmr.Member.Mention(), gmr.GuildID)
 	if gmr.GuildID != guildID {
 		return
 	}
@@ -559,7 +558,6 @@ func memberLeave(s *discordgo.Session, gmr *discordgo.GuildMemberRemove) {
 	}
 }
 func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
-	fmt.Println("Member join:", gma.Member.Mention(), gma.GuildID)
 	if gma.GuildID != guildID {
 		return
 	}
