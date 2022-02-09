@@ -132,6 +132,7 @@ func main() {
 
 	key := "Bot " + envKey
 	dg, _ = discordgo.New(key)
+	dg.LogLevel = discordgo.LogInformational
 	dg.AddHandler(memberJoin)
 	dg.AddHandler(memberLeave)
 	dg.AddHandler(messageCreate)
