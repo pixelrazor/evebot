@@ -1,4 +1,5 @@
 eve.db*
-eve_bot
+evebot
+evebot.exe
 *.exe
 .vscode

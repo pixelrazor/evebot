@@ -20,8 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
-
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -97,31 +95,41 @@ type messageBackup struct {
 var repo DataRepository
 
 func main() {
-	memdb := flag.Bool("memdb", false, "Specifying this flag uses an in memory repository instead of redis")
+	memdb := flag.Bool("memdb", false, "Specifying this flag uses an in memory repository instead of a database")
 	flag.Parse()
 	envKey, ok := os.LookupEnv("EVE_BOT")
 	if !ok {
 		log.Fatalln("Failed to find EVE_BOT in env")
 	}
+
 	if *memdb {
 		fmt.Println("memory")
 		repo = NewMemoryRepo()
 	} else {
-		envRedis, ok := os.LookupEnv("REDIS_HOST")
+		host, ok := os.LookupEnv("DB_HOST")
 		if !ok {
-			log.Fatalln("Failed to find REDIS_HOST in env")
+			log.Fatalln("Failed to find DB_HOST in env")
 		}
-		rdb := redis.NewClient(&redis.Options{
-			Addr: envRedis,
-			DB:   0,
-		})
-		err := rdb.Ping(ctx).Err()
+		user, ok := os.LookupEnv("DB_USER")
+		if !ok {
+			log.Fatalln("Failed to find DB_USER in env")
+		}
+		pass, ok := os.LookupEnv("DB_PASS")
+		if !ok {
+			log.Fatalln("Failed to find DB_PASS in env")
+		}
+		name, ok := os.LookupEnv("DB_NAME")
+		if !ok {
+			log.Fatalln("Failed to find DB_NAME in env")
+		}
+		pgr, err := NewPostgresRepo(host, name, user, pass)
 		if err != nil {
-			log.Fatalln("Failed to ping redis instance:", envRedis, err)
+			log.Fatalln("Failed to connect to postgres:", host, name, user, err)
 		}
-		repo = NewRedisRepo(rdb)
-		defer rdb.Close()
+		defer pgr.Close()
+		repo = pgr
 	}
+
 	key := "Bot " + envKey
 	dg, _ = discordgo.New(key)
 	dg.AddHandler(memberJoin)
