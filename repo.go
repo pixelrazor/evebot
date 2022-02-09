@@ -1,21 +1,15 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log"
-	"strconv"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/go-redis/redis/v8"
 	_ "github.com/lib/pq"
 )
-
-var ctx = context.Background()
 
 type DataRepository interface {
 	// interface for dealing with muting users
@@ -30,110 +24,6 @@ type DataRepository interface {
 	IncrementLeave(month string)
 	// TODO: merge the join/leave getters
 	GetAllLeave() map[string]int
-}
-
-type RedisRepo struct {
-	db *redis.Client
-}
-
-func NewRedisRepo(db *redis.Client) *RedisRepo {
-	return &RedisRepo{db: db}
-}
-
-func (rr *RedisRepo) AddMuted(userID string, mutedUntil time.Time) {
-	err := rr.db.Set(ctx, "muted:"+userID, mutedUntil.Format(time.RFC3339), 0).Err()
-	if err != nil {
-		log.Println("Redis set muted error:", userID, err)
-	}
-}
-
-func (rr *RedisRepo) DeleteMuted(userID string) {
-	err := rr.db.Del(ctx, "muted:"+userID).Err()
-	if err != nil {
-		log.Println("Redis del muted error:", userID, err)
-	}
-}
-
-func (rr *RedisRepo) GetMuted(userID string) (time.Time, error) {
-	res, err := rr.db.Get(ctx, "muted:"+userID).Result()
-	if err != nil {
-		if !errors.Is(err, redis.Nil) {
-			log.Println("Redis get muted user error:", userID, err)
-		}
-		return time.Time{}, err
-	}
-	return time.Parse(time.RFC3339, res)
-}
-
-func (rr *RedisRepo) GetAllMuted() map[string]time.Time {
-	keys, err := rr.db.Keys(ctx, "muted:*").Result()
-	if err != nil {
-		log.Println("Redis muted keys error:", err)
-		return nil
-	}
-	vals := make(map[string]time.Time)
-	for _, key := range keys {
-		val, err := rr.db.Get(ctx, key).Result()
-		if err != nil {
-			log.Println("Redis get muted error:", key, err)
-			return nil
-		}
-		t, _ := time.Parse(time.RFC3339, val)
-		vals[strings.TrimPrefix(key, "muted:")] = t
-	}
-	return vals
-}
-
-func (rr *RedisRepo) IncrementJoin(month string) {
-	err := rr.db.Incr(ctx, "join:"+month).Err()
-	if err != nil {
-		log.Println("Redis incr join error:", err)
-	}
-}
-
-func (rr *RedisRepo) GetAllJoin() map[string]int {
-	keys, err := rr.db.Keys(ctx, "join:*").Result()
-	if err != nil {
-		log.Println("Redis join keys error:", err)
-		return nil
-	}
-	vals := make(map[string]int)
-	for _, key := range keys {
-		val, err := rr.db.Get(ctx, key).Result()
-		if err != nil {
-			log.Println("Redis get join error:", key, err)
-			return nil
-		}
-		i, _ := strconv.Atoi(val)
-		vals[strings.TrimPrefix(key, "join:")] = i
-	}
-	return vals
-}
-
-func (rr *RedisRepo) IncrementLeave(month string) {
-	err := rr.db.Incr(ctx, "leave:"+month).Err()
-	if err != nil {
-		log.Println("Redis incr join error:", err)
-	}
-}
-
-func (rr *RedisRepo) GetAllLeave() map[string]int {
-	keys, err := rr.db.Keys(ctx, "leave:*").Result()
-	if err != nil {
-		log.Println("Redis leave keys error:", err)
-		return nil
-	}
-	vals := make(map[string]int)
-	for _, key := range keys {
-		val, err := rr.db.Get(ctx, key).Result()
-		if err != nil {
-			log.Println("Redis get leave error:", key, err)
-			return nil
-		}
-		i, _ := strconv.Atoi(val)
-		vals[strings.TrimPrefix(key, "leave:")] = i
-	}
-	return vals
 }
 
 type MemoryRepo struct {
