@@ -122,6 +122,31 @@ func main() {
 		repo = NewRedisRepo(rdb)
 		defer rdb.Close()
 	}
+	if false {
+		host, ok := os.LookupEnv("DB_HOST")
+		if !ok {
+			log.Fatalln("Failed to find DB_HOST in env")
+		}
+		user, ok := os.LookupEnv("DB_USER")
+		if !ok {
+			log.Fatalln("Failed to find DB_USER in env")
+		}
+		pass, ok := os.LookupEnv("DB_PASS")
+		if !ok {
+			log.Fatalln("Failed to find DB_PASS in env")
+		}
+		name, ok := os.LookupEnv("DB_NAME")
+		if !ok {
+			log.Fatalln("Failed to find DB_NAME in env")
+		}
+		pgr, err := NewPostgresRepo(host, name, user, pass)
+		if err != nil {
+			log.Fatalln("Failed to connect to postgres:", host, name, user, err)
+		}
+		defer pgr.Close()
+		repo = pgr
+	}
+
 	key := "Bot " + envKey
 	dg, _ = discordgo.New(key)
 	dg.AddHandler(memberJoin)
