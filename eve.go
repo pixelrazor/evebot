@@ -382,6 +382,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			defer log.Println("db end")
 			mem, _ := s.GuildMember(guildID, m.Author.ID)
 			isAdmin := false
+			log.Println("db got member")
 			for _, v := range mem.Roles {
 				if v == adminRole || v == modRole {
 					isAdmin = true
@@ -392,6 +393,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
 				return
 			}
+
+			log.Println("db making dm")
 			channel, err := s.UserChannelCreate(m.Author.ID)
 			if err != nil {
 				log.Println("Failed to create DM channel:", m.Author.ID, err)
