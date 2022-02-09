@@ -399,6 +399,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			}
 
 			mesg := "```\n"
+			log.Println("db before repo")
 			joined := repo.GetAllJoin()
 			leave := repo.GetAllLeave()
 			dates := make([]string, 0)
@@ -414,6 +415,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			for id, until := range muted {
 				mesg += fmt.Sprintf("<@%v> %v: %v\n", id, id, until)
 			}
+			log.Println("db after repo")
 			_, err = s.ChannelMessageSend(channel.ID, mesg)
 			if err != nil {
 				log.Println("Failed to send db dump:", err)
