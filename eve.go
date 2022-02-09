@@ -378,6 +378,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		case "items?":
 			s.ChannelMessageSend(m.ChannelID, "runic > deathcap > lich bane")
 		case "?db":
+			log.Println("db start")
+			defer log.Println("db end")
 			mem, _ := s.GuildMember(guildID, m.Author.ID)
 			isAdmin := false
 			for _, v := range mem.Roles {
@@ -418,6 +420,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				return
 			}
 		case "?mute":
+			log.Println("mute start")
+			defer log.Println("mute end")
 			mem, _ := s.GuildMember(guildID, m.Author.ID)
 			isAdmin := false
 			for _, v := range mem.Roles {
