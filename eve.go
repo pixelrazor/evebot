@@ -20,8 +20,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-redis/redis/v8"
-
 	"github.com/bwmarrin/discordgo"
 )
 
@@ -97,32 +95,17 @@ type messageBackup struct {
 var repo DataRepository
 
 func main() {
-	memdb := flag.Bool("memdb", false, "Specifying this flag uses an in memory repository instead of redis")
+	memdb := flag.Bool("memdb", false, "Specifying this flag uses an in memory repository instead of a database")
 	flag.Parse()
 	envKey, ok := os.LookupEnv("EVE_BOT")
 	if !ok {
 		log.Fatalln("Failed to find EVE_BOT in env")
 	}
+
 	if *memdb {
 		fmt.Println("memory")
 		repo = NewMemoryRepo()
 	} else {
-		envRedis, ok := os.LookupEnv("REDIS_HOST")
-		if !ok {
-			log.Fatalln("Failed to find REDIS_HOST in env")
-		}
-		rdb := redis.NewClient(&redis.Options{
-			Addr: envRedis,
-			DB:   0,
-		})
-		err := rdb.Ping(ctx).Err()
-		if err != nil {
-			log.Fatalln("Failed to ping redis instance:", envRedis, err)
-		}
-		repo = NewRedisRepo(rdb)
-		defer rdb.Close()
-	}
-	if false {
 		host, ok := os.LookupEnv("DB_HOST")
 		if !ok {
 			log.Fatalln("Failed to find DB_HOST in env")

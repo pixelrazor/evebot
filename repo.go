@@ -223,7 +223,7 @@ type PostgresRepo struct {
 }
 
 func NewPostgresRepo(host, dbname, user, password string) (*PostgresRepo, error) {
-	db, err := sql.Open("postgres", fmt.Sprintf("host=%v dbname=%v user=%v password=%v", host, dbname, user, password))
+	db, err := sql.Open("postgres", fmt.Sprintf("host=%v dbname=%v user=%v password=%v sslmode=disable", host, dbname, user, password))
 	if err != nil {
 		return nil, err
 	}
