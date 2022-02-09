@@ -12,6 +12,7 @@ jobs:
     steps:
       - uses: actions/checkout@master
       - uses: actions/setup-go@v2
+      - run: env
       - run: go build -v ./...
       - run: go test -v ./...
   deploy:
@@ -27,4 +28,4 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ GITHUB_REPOSITORY }}:latest
+          tags: pixelrazor:latest
