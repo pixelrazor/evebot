@@ -288,11 +288,7 @@ func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
 		fmt.Println("uinfo GuildMember:", err)
 		return
 	}
-	join, err := discordgo.Timestamp(member.JoinedAt).Parse()
-	if err != nil {
-		fmt.Println("uinfo JoinedAt.Parse:", err)
-		return
-	}
+	join := member.JoinedAt
 	roleMap := make(map[string]string)
 	gRoles, err := s.GuildRoles(guild)
 	if err != nil {
@@ -354,7 +350,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			content:     m.Content,
 			username:    fmt.Sprintf("%v#%v", m.Author.Username, m.Author.Discriminator),
 			userID:      m.Author.ID,
-			timestamp:   string(m.Timestamp),
+			timestamp:   m.Timestamp.Format("2006-01-02"),
 			attachments: imgs,
 		}
 		pastMesgIndex = (pastMesgIndex + 1) % 64
