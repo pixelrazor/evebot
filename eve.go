@@ -289,18 +289,15 @@ func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
 		return
 	}
 	join := member.JoinedAt
-	roleMap := make(map[string]string)
-	gRoles, err := s.GuildRoles(guild)
-	if err != nil {
-		fmt.Println("uinfo GuildRoles:", err)
-		return
-	}
-	for _, v := range gRoles {
-		roleMap[v.ID] = v.Name
-	}
+
 	roles := ""
 	for _, v := range member.Roles {
-		roles += roleMap[v] + "\n"
+		role, err := Role(s, guild, v)
+		if err != nil {
+			log.Println("Failed looking up role in uinfo:", err)
+			return
+		}
+		roles += role.Name + "\n"
 	}
 	embed := &discordgo.MessageEmbed{
 		Title: fmt.Sprintf("%v#%v", u.Username, u.Discriminator),
@@ -374,11 +371,8 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		case "items?":
 			s.ChannelMessageSend(m.ChannelID, "runic > deathcap > lich bane")
 		case "?db":
-			log.Println("db start")
-			defer log.Println("db end")
 			mem, _ := GuildMember(s, guildID, m.Author.ID)
 			isAdmin := false
-			log.Println("db got member")
 			for _, v := range mem.Roles {
 				if v == adminRole || v == modRole {
 					isAdmin = true
@@ -390,7 +384,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				return
 			}
 
-			log.Println("db making dm")
 			channel, err := s.UserChannelCreate(m.Author.ID)
 			if err != nil {
 				log.Println("Failed to create DM channel:", m.Author.ID, err)
@@ -398,7 +391,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			}
 
 			mesg := "```\n"
-			log.Println("db before repo")
 			joined := repo.GetAllJoin()
 			leave := repo.GetAllLeave()
 			dates := make([]string, 0)
@@ -414,15 +406,12 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			for id, until := range muted {
 				mesg += fmt.Sprintf("<@%v> %v: %v\n", id, id, until)
 			}
-			log.Println("db after repo")
 			_, err = s.ChannelMessageSend(channel.ID, mesg)
 			if err != nil {
 				log.Println("Failed to send db dump:", err)
 				return
 			}
 		case "?mute":
-			log.Println("mute start")
-			defer log.Println("mute end")
 			mem, _ := GuildMember(s, guildID, m.Author.ID)
 			isAdmin := false
 			for _, v := range mem.Roles {
