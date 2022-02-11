@@ -178,7 +178,7 @@ func applyRoles(s *discordgo.Session, userRoles map[string][]string) {
 }
 
 func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
-	member, err := s.GuildMember(p.GuildID, p.User.ID)
+	member, err := GuildMember(s, p.GuildID, p.User.ID)
 	if err != nil {
 		log.Println("Error getting member for presence update:", err)
 		return
@@ -283,7 +283,7 @@ func messageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 }
 func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
 	created, _ := discordgo.SnowflakeTimestamp(u.ID)
-	member, err := s.GuildMember(guild, u.ID)
+	member, err := GuildMember(s, guild, u.ID)
 	if err != nil {
 		fmt.Println("uinfo GuildMember:", err)
 		return
@@ -376,7 +376,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		case "?db":
 			log.Println("db start")
 			defer log.Println("db end")
-			mem, _ := s.GuildMember(guildID, m.Author.ID)
+			mem, _ := GuildMember(s, guildID, m.Author.ID)
 			isAdmin := false
 			log.Println("db got member")
 			for _, v := range mem.Roles {
@@ -423,7 +423,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		case "?mute":
 			log.Println("mute start")
 			defer log.Println("mute end")
-			mem, _ := s.GuildMember(guildID, m.Author.ID)
+			mem, _ := GuildMember(s, guildID, m.Author.ID)
 			isAdmin := false
 			for _, v := range mem.Roles {
 				if v == adminRole || v == modRole {
@@ -450,7 +450,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			}
 			muteMember(s, id, t)
 		case "?unmute":
-			mem, _ := s.GuildMember(guildID, m.Author.ID)
+			mem, _ := GuildMember(s, guildID, m.Author.ID)
 			isAdmin := false
 			for _, v := range mem.Roles {
 				if v == adminRole || v == modRole {
@@ -491,7 +491,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 				fmt.Println("sinfo png.Encode:", err)
 				return
 			}
-			guild, err := s.Guild(m.GuildID)
+			guild, err := Guild(s, m.GuildID)
 			if err != nil {
 				fmt.Println("sinfo Guild:", err)
 				return
