@@ -144,7 +144,7 @@ func main() {
 	}
 
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
 	log.Println("peace out")
@@ -198,7 +198,7 @@ func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 		if activity.Type == discordgo.ActivityTypeStreaming { // p.Game != nil  do i need this?
 			log.Println("Presence info:", isStreaming[p.User.ID], activity)
 			if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
-				mesg := activity.Name + "\n"
+				mesg := activity.Details + "\n"
 				_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
 				if err != nil {
 					log.Println("Error sending stream message:", err)
