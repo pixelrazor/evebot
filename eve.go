@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"image"
-	"image/png"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -14,7 +13,6 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -295,12 +293,12 @@ func messageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
 	}
 
 }
-func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
+func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.MessageEmbed, error) {
 	created, _ := discordgo.SnowflakeTimestamp(u.ID)
 	member, err := GuildMember(s, guild, u.ID)
 	if err != nil {
 		fmt.Println("uinfo GuildMember:", err)
-		return
+		return nil, err
 	}
 	join := member.JoinedAt
 
@@ -309,7 +307,7 @@ func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
 		role, err := Role(s, guild, v)
 		if err != nil {
 			log.Println("Failed looking up role in uinfo:", err)
-			return
+			return nil, err
 		}
 		roles += role.Name + "\n"
 	}
@@ -331,10 +329,7 @@ func uinfo(u *discordgo.User, channel, guild string, s *discordgo.Session) {
 	if member.Nick != "" {
 		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{"Nickname", member.Nick, true})
 	}
-	_, err = s.ChannelMessageSendEmbed(channel, embed)
-	if err != nil {
-		fmt.Println("Error sending uinfo message:", err)
-	}
+	return embed, nil
 }
 
 func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
@@ -384,182 +379,6 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		switch strings.ToLower(args[0]) {
 		case "items?":
 			s.ChannelMessageSend(m.ChannelID, "runic > deathcap > lich bane")
-		case "?db":
-			mem, _ := GuildMember(s, guildID, m.Author.ID)
-			isAdmin := false
-			for _, v := range mem.Roles {
-				if v == adminRole || v == modRole {
-					isAdmin = true
-					break
-				}
-			}
-			if !isAdmin {
-				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
-				return
-			}
-
-			channel, err := s.UserChannelCreate(m.Author.ID)
-			if err != nil {
-				log.Println("Failed to create DM channel:", m.Author.ID, err)
-				return
-			}
-
-			mesg := "```\n"
-			joined := repo.GetAllJoin()
-			leave := repo.GetAllLeave()
-			dates := make([]string, 0)
-			for k := range joined {
-				dates = append(dates, k)
-			}
-			sort.Strings(dates)
-			for _, date := range dates {
-				mesg += fmt.Sprintf("%v: +/- %v/%v\n", date, joined[date], leave[date])
-			}
-			mesg += "```\n"
-			muted := repo.GetAllMuted()
-			for id, until := range muted {
-				mesg += fmt.Sprintf("<@%v> %v: %v\n", id, id, until)
-			}
-			_, err = s.ChannelMessageSend(channel.ID, mesg)
-			if err != nil {
-				log.Println("Failed to send db dump:", err)
-				return
-			}
-		case "?mute":
-			mem, _ := GuildMember(s, guildID, m.Author.ID)
-			isAdmin := false
-			for _, v := range mem.Roles {
-				if v == adminRole || v == modRole {
-					isAdmin = true
-					break
-				}
-			}
-			if !isAdmin {
-				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
-				return
-			}
-			if len(args) != 3 {
-				s.ChannelMessageSend(m.ChannelID, "Error: need 2 arguments (?mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
-				return
-			}
-			id := args[1]
-			if len(m.Mentions) > 0 {
-				id = m.Mentions[0].ID
-			}
-			t, err := time.ParseDuration(args[2])
-			if err != nil {
-				s.ChannelMessageSend(m.ChannelID, "Error: invalid duration (?mute @user duration) (24h for 1 day, 1h30m for an hour and a half, etc)")
-				return
-			}
-			muteMember(s, id, t)
-		case "?unmute":
-			mem, _ := GuildMember(s, guildID, m.Author.ID)
-			isAdmin := false
-			for _, v := range mem.Roles {
-				if v == adminRole || v == modRole {
-					isAdmin = true
-					break
-				}
-			}
-			if !isAdmin {
-				s.ChannelMessageSend(m.ChannelID, "Error: You ain't no admin, punk")
-				return
-			}
-			if len(args) != 2 {
-				s.ChannelMessageSend(m.ChannelID, "Error: need 1 argument (?unmute @user)")
-				return
-			}
-			id := args[1]
-			if len(m.Mentions) > 0 {
-				id = m.Mentions[0].ID
-			}
-			s.GuildMemberRoleRemove(guildID, id, muteRole)
-			repo.DeleteMuted(id)
-		case "?uinfo":
-			if len(m.Mentions) == 0 {
-				uinfo(m.Author, m.ChannelID, m.GuildID, s)
-			}
-			for _, v := range m.Mentions {
-				uinfo(v, m.ChannelID, m.GuildID, s)
-			}
-		case "?sinfo":
-			iconImage, err := s.GuildIcon(m.GuildID)
-			if err != nil {
-				fmt.Println("sinfo GuildIcon:", err)
-				return
-			}
-			var buff bytes.Buffer
-			err = png.Encode(&buff, iconImage)
-			if err != nil {
-				fmt.Println("sinfo png.Encode:", err)
-				return
-			}
-			guild, err := Guild(s, m.GuildID)
-			if err != nil {
-				fmt.Println("sinfo Guild:", err)
-				return
-			}
-			owner, err := s.User(guild.OwnerID)
-			if err != nil {
-				fmt.Println("sinfo User:", err)
-				return
-			}
-			voice, text := 0, 0
-			for _, v := range guild.Channels {
-				switch v.Type {
-				case discordgo.ChannelTypeGuildText:
-					text++
-				case discordgo.ChannelTypeGuildVoice:
-					voice++
-				}
-			}
-			created, _ := discordgo.SnowflakeTimestamp(guild.ID)
-			emojis := make([]string, 1)
-			for _, v := range guild.Emojis {
-				emoji := v.MessageFormat() + " "
-				if len(emojis[len(emojis)-1]+emoji) > 1024 {
-					emojis = append(emojis, emoji)
-				} else {
-					emojis[len(emojis)-1] += emoji
-				}
-			}
-			mesg := &discordgo.MessageSend{
-				Embed: &discordgo.MessageEmbed{
-					Title: guild.Name,
-					Color: embedColor,
-					Thumbnail: &discordgo.MessageEmbedThumbnail{
-						URL: "attachment://thumb.png",
-					},
-					Fields: []*discordgo.MessageEmbedField{
-						{"ID", guild.ID, true},
-						{"Owner", fmt.Sprintf("%v#%v", owner.Username, owner.Discriminator), true},
-						{"Members", fmt.Sprint(guild.MemberCount), true},
-						{"Text channels", fmt.Sprint(text), true},
-						{"Voice channels", fmt.Sprint(voice), true},
-						{"Created at", created.Format("January 2, 2006"), true},
-						{"Region", guild.Region, true},
-						{"Roles", fmt.Sprint(len(guild.Roles)), true},
-					},
-				},
-				Files: []*discordgo.File{
-					&discordgo.File{
-						Name:   "thumb.png",
-						Reader: &buff,
-					},
-				},
-			}
-			for i, v := range emojis {
-				if i == 0 {
-					mesg.Embed.Fields = append(mesg.Embed.Fields, &discordgo.MessageEmbedField{"Custom emojis", v, true})
-				} else {
-					mesg.Embed.Fields = append(mesg.Embed.Fields, &discordgo.MessageEmbedField{"\u200b", v, true})
-				}
-
-			}
-			_, err = s.ChannelMessageSendComplex(m.ChannelID, mesg)
-			if err != nil {
-				fmt.Println("sinfo message send error:", err)
-			}
 		}
 	}
 }
