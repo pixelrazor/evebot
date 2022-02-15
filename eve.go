@@ -138,9 +138,21 @@ func main() {
 	dg.AddHandler(messageDelete)
 	dg.AddHandler(presenceUpdate)
 	dg.AddHandler(onReady)
+	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
+			h(s, i)
+		}
+	})
 	dg.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsGuildPresences)
 	if err := dg.Open(); err != nil {
 		panic(err)
+	}
+
+	for _, v := range commands {
+		_, err := dg.ApplicationCommandCreate(dg.State.User.ID, guildID, v)
+		if err != nil {
+			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
+		}
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -217,6 +229,7 @@ func muteMember(s *discordgo.Session, u string, d time.Duration) {
 }
 
 func mute(s *discordgo.Session, u string, d time.Duration) {
+	// TODO: a bug exists if you mute an already muted user longer than the first mute. the user will be unmuted for the shorted duration
 	repo.AddMuted(u, time.Now().Add(d))
 	<-time.After(d)
 	err := s.GuildMemberRoleRemove(guildID, u, muteRole)
@@ -226,6 +239,7 @@ func mute(s *discordgo.Session, u string, d time.Duration) {
 	repo.DeleteMuted(u)
 }
 
+// TODO: serialize the join and leave processing
 func refreshInvites() {
 	for {
 		func() {
