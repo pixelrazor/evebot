@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"flag"
 	"fmt"
-	"image"
 	"io/ioutil"
 	"log"
 	"math/rand"
@@ -22,7 +21,6 @@ import (
 )
 
 var (
-	random = rand.NewSource(time.Now().UnixNano())
 	quotes = []string{
 		"Tim to feed",
 		"Moving in hels",
@@ -51,15 +49,12 @@ var (
 	modRole       = "222406937768099840"
 	streamerRole  = "328636992999129088"
 	embedColor    = 0x8031ce
-	dg            *discordgo.Session // TODO: remove this global
 
 	invites     []invite
 	invitesLock sync.Mutex
 
 	pastMessages  [64]*messageBackup
 	pastMesgIndex = 0
-
-	isStreaming = make(map[string]time.Time)
 
 	// permanentRoles holds member IDs mapped to a list of roles they should have. These roles are
 	// applied if they rejoin the server
@@ -69,10 +64,6 @@ var (
 	}
 )
 
-type img struct {
-	name  string
-	image image.Image
-}
 type invite struct {
 	uses          int
 	code          string
@@ -90,8 +81,6 @@ type messageBackup struct {
 	attachments []*discordgo.File
 }
 
-var repo DataRepository
-
 func main() {
 	memdb := flag.Bool("memdb", false, "Specifying this flag uses an in memory repository instead of a database")
 	flag.Parse()
@@ -100,6 +89,7 @@ func main() {
 		log.Fatalln("Failed to find EVE_BOT in env")
 	}
 
+	var repo DataRepository
 	if *memdb {
 		fmt.Println("memory")
 		repo = NewMemoryRepo()
@@ -129,28 +119,18 @@ func main() {
 	}
 
 	key := "Bot " + envKey
-	dg, _ = discordgo.New(key)
-	dg.AddHandler(memberJoin)
-	dg.AddHandler(memberLeave)
-	dg.AddHandler(messageCreate)
-	dg.AddHandler(messageDelete)
-	dg.AddHandler(presenceUpdate)
-	dg.AddHandler(onReady)
-	dg.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
-		if h, ok := commandHandlers[i.ApplicationCommandData().Name]; ok {
-			h(s, i)
-		}
-	})
-	dg.Identify.Intents = discordgo.MakeIntent(discordgo.IntentsGuildMembers | discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsGuildPresences)
-	if err := dg.Open(); err != nil {
-		panic(err)
+	dg, _ := discordgo.New(key)
+
+	bot := EveBot{
+		s:      dg,
+		repo:   repo,
+		random: rand.New(rand.NewSource(time.Now().UnixNano())),
 	}
 
-	for _, v := range commands {
-		_, err := dg.ApplicationCommandCreate(dg.State.User.ID, guildID, v)
-		if err != nil {
-			log.Panicf("Cannot create '%v' command: %v", v.Name, err)
-		}
+	bot.handlers()
+
+	if err := bot.run(); err != nil {
+		log.Fatalln("Failed to start bot:", err)
 	}
 
 	sig := make(chan os.Signal, 1)
@@ -158,22 +138,6 @@ func main() {
 	<-sig
 
 	log.Println("peace out")
-}
-
-func onReady(s *discordgo.Session, r *discordgo.Ready) {
-	go func() {
-		for {
-			changeBotIcon()
-			<-time.After(30 * time.Minute)
-		}
-	}()
-	go refreshInvites()
-	muted := repo.GetAllMuted()
-	for member, mutedUntil := range muted {
-		go mute(s, member, mutedUntil.Sub(time.Now()))
-	}
-	applyRoles(s, permanentRoles)
-	log.Println("we up")
 }
 
 func applyRoles(s *discordgo.Session, userRoles map[string][]string) {
@@ -187,63 +151,30 @@ func applyRoles(s *discordgo.Session, userRoles map[string][]string) {
 	}
 }
 
-func presenceUpdate(s *discordgo.Session, p *discordgo.PresenceUpdate) {
-	member, err := GuildMember(s, p.GuildID, p.User.ID)
-	if err != nil {
-		log.Println("Error getting member for presence update:", err)
-		return
-	}
-	isStreamer := false
-	for _, role := range member.Roles {
-		if role == streamerRole {
-			isStreamer = true
-			break
-		}
-	}
-	if !isStreamer {
-		return
-	}
-
-	for _, activity := range p.Activities {
-		if activity.Type == discordgo.ActivityTypeStreaming { // p.Game != nil  do i need this?
-			log.Println("Presence info:", isStreaming[p.User.ID], activity)
-			if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
-				mesg := activity.Details + "\n"
-				_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
-				if err != nil {
-					log.Println("Error sending stream message:", err)
-				}
-			}
-			isStreaming[p.User.ID] = time.Now()
-			break
-		}
-	}
-}
-
 // muteMember applies the muted role, then starts a time to remove the role after d elapses
-func muteMember(s *discordgo.Session, u string, d time.Duration) {
+func (eb *EveBot) muteMember(s *discordgo.Session, u string, d time.Duration) {
 	s.GuildMemberRoleAdd(guildID, u, muteRole)
-	go mute(s, u, d)
+	go eb.mute(s, u, d)
 }
 
-func mute(s *discordgo.Session, u string, d time.Duration) {
+func (eb *EveBot) mute(s *discordgo.Session, u string, d time.Duration) {
 	// TODO: a bug exists if you mute an already muted user longer than the first mute. the user will be unmuted for the shorted duration
-	repo.AddMuted(u, time.Now().Add(d))
+	eb.repo.AddMuted(u, time.Now().Add(d))
 	<-time.After(d)
 	err := s.GuildMemberRoleRemove(guildID, u, muteRole)
 	if err != nil {
 		log.Println("Failed to remove mute role:", u, err)
 	}
-	repo.DeleteMuted(u)
+	eb.repo.DeleteMuted(u)
 }
 
 // TODO: serialize the join and leave processing
-func refreshInvites() {
+func refreshInvites(s *discordgo.Session) {
 	for {
 		func() {
 			invitesLock.Lock()
 			defer invitesLock.Unlock()
-			ginvites, err := dg.GuildInvites(guildID)
+			ginvites, err := s.GuildInvites(guildID)
 			if err != nil {
 				fmt.Println("Error getting invites:", err)
 				return
@@ -264,35 +195,6 @@ func refreshInvites() {
 	}
 }
 
-func messageDelete(s *discordgo.Session, m *discordgo.MessageDelete) {
-	if m.GuildID != guildID {
-		return
-	}
-	for _, v := range pastMessages {
-		if v == nil {
-			break
-		}
-		if v.id == m.ID {
-			embed := &discordgo.MessageSend{
-				Embed: &discordgo.MessageEmbed{
-					Title:       "Deleted Message",
-					Description: v.content,
-					Timestamp:   v.timestamp,
-					Color:       embedColor,
-					Fields: []*discordgo.MessageEmbedField{
-						{"Username", v.username, true},
-						{"User ID", v.userID, true},
-						{"Channel", "<#" + v.channelID + ">", true},
-					},
-				},
-				Files: v.attachments,
-			}
-			s.ChannelMessageSendComplex(trashCan, embed)
-			return
-		}
-	}
-
-}
 func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.MessageEmbed, error) {
 	created, _ := discordgo.SnowflakeTimestamp(u.ID)
 	member, err := GuildMember(s, guild, u.ID)
@@ -318,112 +220,295 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 			URL: u.AvatarURL(""),
 		},
 		Fields: []*discordgo.MessageEmbedField{
-			{"ID", u.ID, true},
-			{"Joined server", join.Format("January 2, 2006"), true},
-			{"Joined Discord", created.Format("January 2, 2006"), true},
+			{
+				Name:   "ID",
+				Value:  u.ID,
+				Inline: true,
+			},
+			{
+				Name:   "Joined server",
+				Value:  join.Format("January 2, 2006"),
+				Inline: true,
+			},
+			{
+				Name:   "Joined Discord",
+				Value:  created.Format("January 2, 2006"),
+				Inline: true,
+			},
 		},
 	}
 	if roles != "" {
-		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{fmt.Sprintf("Roles (%v)", len(member.Roles)), roles, true})
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   fmt.Sprintf("Roles (%v)", len(member.Roles)),
+			Value:  roles,
+			Inline: true,
+		})
 	}
 	if member.Nick != "" {
-		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{"Nickname", member.Nick, true})
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   "Nickname",
+			Value:  member.Nick,
+			Inline: true,
+		})
 	}
 	return embed, nil
 }
 
-func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
-	if m.Author.Bot {
-		return
+// getPNG returns a base6 encoded image randomly from the current dir
+// TODO: embed images
+func getPNG(random *rand.Rand) string {
+	files, _ := ioutil.ReadDir("./")
+	pngs := make([]string, 0)
+	for _, v := range files {
+		if strings.Contains(v.Name(), ".png") {
+			pngs = append(pngs, v.Name())
+		}
 	}
-	if m.GuildID == guildID {
-		var imgs []*discordgo.File
-		for _, v := range m.Attachments {
-			resp, err := http.Get(v.URL)
-			if err == nil && resp.StatusCode < 300 {
-				data, err := ioutil.ReadAll(resp.Body)
-				if err != nil {
-					resp.Body.Close()
-				}
-				buff := bytes.NewBuffer(data)
-				imgs = append(imgs, &discordgo.File{Name: v.Filename, Reader: buff})
-				resp.Body.Close()
-			}
+	file := pngs[int64(random.Intn(len(pngs)))]
+	img, err := ioutil.ReadFile(file)
+	if err != nil {
+		log.Println("Failed to read image:", file, err)
+		return ""
+	}
+	contentType := http.DetectContentType(img)
+	base64img := base64.StdEncoding.EncodeToString(img)
+	return fmt.Sprintf("data:%s;base64,%s", contentType, base64img)
+}
+
+func changeBotIcon(s *discordgo.Session, random *rand.Rand) error {
+	_, err := s.UserUpdate("", "", "", getPNG(random), "")
+	if err != nil {
+		return err
+	}
+	return s.UpdateStatusComplex(discordgo.UpdateStatusData{
+		Status: quotes[random.Int63()%int64(len(quotes))],
+	})
+}
+
+type EveBot struct {
+	s      *discordgo.Session
+	repo   DataRepository
+	random *rand.Rand
+}
+
+type EveBotInteraction struct {
+	command *discordgo.ApplicationCommand
+	handler func(s *discordgo.Session, i *discordgo.InteractionCreate)
+}
+
+func (eb *EveBot) registeredInteractions() []EveBotInteraction {
+	return []EveBotInteraction{
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "mute",
+				Description: "Temporarily mute a member",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to mute",
+						Required:    true,
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "duration",
+						Description: "Duration to mute. Example: 2h5m",
+						Required:    true,
+					},
+				},
+			},
+			handler: eb.muteHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "unmute",
+				Description: "Unmute a member",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to unmute",
+						Required:    true,
+					},
+				},
+			},
+			handler: eb.unmuteHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "db", // TODO: subcommands for different sets of data
+				Description: "Dump the database",
+			},
+			handler: eb.dbHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "sinfo",
+				Description: "Get server information",
+			},
+			handler: sinfoHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "minfo",
+				Description: "Get member information",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to view info for",
+					},
+				},
+			},
+			handler: minfoHandler,
+		},
+	}
+}
+
+func (eb *EveBot) handlers() {
+	interactionHandlers := make(map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate))
+	for _, interaction := range eb.registeredInteractions() {
+		interactionHandlers[interaction.command.Name] = interaction.handler
+
+	}
+	eb.s.AddHandler(func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		if handle, ok := interactionHandlers[i.ApplicationCommandData().Name]; ok {
+			handle(s, i)
 		}
-		pastMessages[pastMesgIndex] = &messageBackup{
-			id:          m.ID,
-			channelID:   m.ChannelID,
-			content:     m.Content,
-			username:    fmt.Sprintf("%v#%v", m.Author.Username, m.Author.Discriminator),
-			userID:      m.Author.ID,
-			timestamp:   m.Timestamp.Format("2006-01-02"),
-			attachments: imgs,
-		}
-		pastMesgIndex = (pastMesgIndex + 1) % 64
+	})
+	eb.s.AddHandler(eb.handleOnReady())
+	eb.s.AddHandler(eb.handlePresenceUpdate())
+	eb.s.AddHandler(eb.handleMemberAdd())
+	eb.s.AddHandler(eb.handleMemberRemove())
+	eb.s.AddHandler(eb.handleMessageDelete())
+	eb.s.AddHandler(eb.handleMessageCreate())
+	eb.s.Identify.Intents = discordgo.MakeIntent(
+		discordgo.IntentsGuildMembers |
+			discordgo.IntentsGuildMessages |
+			discordgo.IntentsDirectMessages |
+			discordgo.IntentsGuildPresences)
+}
+
+func (eb *EveBot) run() error {
+	if err := eb.s.Open(); err != nil {
+		return fmt.Errorf("failed to start session: %w", err)
 	}
 
-	if hasEgg, _ := regexp.MatchString("(?i)\\beggs?\\b", m.Content); hasEgg || strings.Contains(m.Content, "🥚") {
-		_, err := s.ChannelMessageSend(m.ChannelID, "🥚")
+	for _, v := range eb.registeredInteractions() {
+		_, err := eb.s.ApplicationCommandCreate(eb.s.State.User.ID, guildID, v.command)
 		if err != nil {
-			fmt.Println("Error sending egg message:", err)
+			return fmt.Errorf("cannot create '%v' command: %w", v.command.Name, err)
 		}
 	}
-	if lmode, _ := regexp.MatchString("(?i)light (mode|theme)", m.Content); lmode {
-		_, err := s.ChannelMessageSend(m.ChannelID, "It's better in the dark")
-		if err != nil {
-			fmt.Println("Error sending light mode message:", err)
+
+	return nil
+}
+
+func (eb *EveBot) handleOnReady() interface{} {
+	return func(s *discordgo.Session, r *discordgo.Ready) {
+		go func() {
+			for {
+				changeBotIcon(eb.s, eb.random)
+				<-time.After(30 * time.Minute)
+			}
+		}()
+		go refreshInvites(s)
+		muted := eb.repo.GetAllMuted()
+		for member, mutedUntil := range muted {
+			go eb.mute(s, member, time.Until(mutedUntil))
 		}
+		applyRoles(s, permanentRoles)
+		log.Println("Eve bot is ready")
 	}
-	args := strings.Fields(m.Content)
-	if len(args) > 0 {
-		switch strings.ToLower(args[0]) {
-		case "items?":
-			s.ChannelMessageSend(m.ChannelID, "runic > deathcap > lich bane")
+}
+
+func (eb *EveBot) handlePresenceUpdate() interface{} {
+	isStreaming := make(map[string]time.Time)
+	return func(s *discordgo.Session, p *discordgo.PresenceUpdate) {
+		member, err := GuildMember(s, p.GuildID, p.User.ID)
+		if err != nil {
+			log.Println("Error getting member for presence update:", err)
+			return
+		}
+		isStreamer := false
+		for _, role := range member.Roles {
+			if role == streamerRole {
+				isStreamer = true
+				break
+			}
+		}
+		if !isStreamer {
+			return
+		}
+
+		for _, activity := range p.Activities {
+			if activity.Type == discordgo.ActivityTypeStreaming { // p.Game != nil  do i need this?
+				log.Println("Presence info:", isStreaming[p.User.ID], activity)
+				if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
+					mesg := activity.Details + "\n"
+					_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
+					if err != nil {
+						log.Println("Error sending stream message:", err)
+					}
+				}
+				isStreaming[p.User.ID] = time.Now()
+				break
+			}
 		}
 	}
 }
-func memberLeave(s *discordgo.Session, gmr *discordgo.GuildMemberRemove) {
-	if gmr.GuildID != guildID {
-		return
-	}
-	repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-	_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
-	if err != nil {
-		fmt.Println("Error sending member leave message:", err)
-	}
-}
-func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
-	if gma.GuildID != guildID {
-		return
-	}
-	repo.IncrementJoin(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-	until, err := repo.GetMuted(gma.User.ID)
-	if err == nil {
-		// TODO: reapply muted here
-		s.ChannelMessageSend(partyChannel, fmt.Sprintf("%v (%v) is a punk ass mute evader (%v remaining)", gma.User.Mention(), gma.User.ID, time.Until(until)))
-		repo.DeleteMuted(gma.User.ID)
-	}
-	applyRoles(s, permanentRoles)
-	invitesLock.Lock()
-	defer invitesLock.Unlock()
-	ginvites, _ := dg.GuildInvites(guildID)
-	newInvs := make([]invite, len(ginvites))
-	for i := range ginvites {
-		newInvs[i].code = ginvites[i].Code
-		if ginvites[i].Inviter != nil {
-			newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
-			newInvs[i].id = ginvites[i].Inviter.ID
-			newInvs[i].name = ginvites[i].Inviter.Username
-		} else {
-			newInvs[i].discriminator = "?"
-			newInvs[i].id = "?"
-			newInvs[i].name = "?"
+
+func (eb *EveBot) handleMemberAdd() interface{} {
+	return func(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
+		if gma.GuildID != guildID {
+			return
 		}
-		newInvs[i].uses = ginvites[i].Uses
-	}
-	for _, new := range newInvs {
-		for _, old := range invites {
-			if old.code == new.code && old.uses+1 == new.uses {
+		eb.repo.IncrementJoin(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
+		until, err := eb.repo.GetMuted(gma.User.ID)
+		if err == nil {
+			// TODO: reapply muted here
+			s.ChannelMessageSend(partyChannel, fmt.Sprintf("%v (%v) is a punk ass mute evader (%v remaining)", gma.User.Mention(), gma.User.ID, time.Until(until)))
+			eb.repo.DeleteMuted(gma.User.ID)
+		}
+		applyRoles(s, permanentRoles)
+		invitesLock.Lock()
+		defer invitesLock.Unlock()
+		ginvites, _ := s.GuildInvites(guildID)
+		newInvs := make([]invite, len(ginvites))
+		for i := range ginvites {
+			newInvs[i].code = ginvites[i].Code
+			if ginvites[i].Inviter != nil {
+				newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
+				newInvs[i].id = ginvites[i].Inviter.ID
+				newInvs[i].name = ginvites[i].Inviter.Username
+			} else {
+				newInvs[i].discriminator = "?"
+				newInvs[i].id = "?"
+				newInvs[i].name = "?"
+			}
+			newInvs[i].uses = ginvites[i].Uses
+		}
+		for _, new := range newInvs {
+			for _, old := range invites {
+				if old.code == new.code && old.uses+1 == new.uses {
+					_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
+					if err != nil {
+						fmt.Println("Error sending member join message:", err)
+					}
+					invites = newInvs
+					return
+				}
+			}
+		}
+		for _, new := range newInvs {
+			found := false
+			for _, old := range invites {
+				if old.code == new.code {
+					found = true
+					break
+				}
+			}
+			if !found {
 				_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
 				if err != nil {
 					fmt.Println("Error sending member join message:", err)
@@ -432,61 +517,120 @@ func memberJoin(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
 				return
 			}
 		}
-	}
-	for _, new := range newInvs {
-		found := false
-		for _, old := range invites {
-			if old.code == new.code {
-				found = true
-				break
-			}
+		_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
+		if err != nil {
+			fmt.Println("Error sending member join message:", err)
 		}
-		if !found {
-			_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
-			if err != nil {
-				fmt.Println("Error sending member join message:", err)
-			}
-			invites = newInvs
+
+	}
+}
+
+func (eb *EveBot) handleMemberRemove() interface{} {
+	return func(s *discordgo.Session, gmr *discordgo.GuildMemberRemove) {
+		if gmr.GuildID != guildID {
 			return
 		}
-	}
-	_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
-	if err != nil {
-		fmt.Println("Error sending member join message:", err)
-	}
-
-}
-func getPNG() string {
-	files, _ := ioutil.ReadDir("./")
-	pngs := make([]string, 0)
-	for _, v := range files {
-		if strings.Contains(v.Name(), ".png") {
-			pngs = append(pngs, v.Name())
+		eb.repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
+		_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
+		if err != nil {
+			fmt.Println("Error sending member leave message:", err)
 		}
 	}
-	file := pngs[random.Int63()%int64(len(pngs))]
-	img, err := ioutil.ReadFile(file)
-	if err != nil {
-		fmt.Println(err)
-	}
-	contentType := http.DetectContentType(img)
-	base64img := base64.StdEncoding.EncodeToString(img)
-	return fmt.Sprintf("data:%s;base64,%s", contentType, base64img)
 }
 
-func changeBotIcon() {
-	_, err := dg.UserUpdate("", "", "", getPNG(), "")
-	if err != nil {
-		fmt.Println("Error updating bot icon:")
+func (eb *EveBot) handleMessageDelete() interface{} {
+	return func(s *discordgo.Session, m *discordgo.MessageDelete) {
+		if m.GuildID != guildID {
+			return
+		}
+		for _, v := range pastMessages {
+			if v == nil {
+				break
+			}
+			if v.id == m.ID {
+				embed := &discordgo.MessageSend{
+					Embed: &discordgo.MessageEmbed{
+						Title:       "Deleted Message",
+						Description: v.content,
+						Timestamp:   v.timestamp,
+						Color:       embedColor,
+						Fields: []*discordgo.MessageEmbedField{
+							{
+								Name:   "Username",
+								Value:  v.username,
+								Inline: true,
+							},
+							{
+								Name:   "User ID",
+								Value:  v.userID,
+								Inline: true,
+							},
+							{
+								Name:   "Channel",
+								Value:  "<#" + v.channelID + ">",
+								Inline: true,
+							},
+						},
+					},
+					Files: v.attachments,
+				}
+				s.ChannelMessageSendComplex(trashCan, embed)
+				return
+			}
+		}
+
 	}
-	dg.UpdateStatusComplex(discordgo.UpdateStatusData{
-		Status: quotes[random.Int63()%int64(len(quotes))],
-	})
 }
 
-func changeServerIcon() {
-	_, err := dg.GuildEdit(guildID, discordgo.GuildParams{Icon: getPNG()})
-	if err != nil {
-		fmt.Println("Error updating server icon:")
+func (eb *EveBot) handleMessageCreate() interface{} {
+	return func(s *discordgo.Session, m *discordgo.MessageCreate) {
+		if m.Author.Bot {
+			return
+		}
+		if m.GuildID == guildID {
+			var imgs []*discordgo.File
+			for _, v := range m.Attachments {
+				resp, err := http.Get(v.URL)
+				if err == nil && resp.StatusCode < 300 {
+					data, err := ioutil.ReadAll(resp.Body)
+					if err != nil {
+						resp.Body.Close()
+					}
+					buff := bytes.NewBuffer(data)
+					imgs = append(imgs, &discordgo.File{Name: v.Filename, Reader: buff})
+					resp.Body.Close()
+				}
+			}
+			pastMessages[pastMesgIndex] = &messageBackup{
+				id:          m.ID,
+				channelID:   m.ChannelID,
+				content:     m.Content,
+				username:    fmt.Sprintf("%v#%v", m.Author.Username, m.Author.Discriminator),
+				userID:      m.Author.ID,
+				timestamp:   m.Timestamp.Format("2006-01-02"),
+				attachments: imgs,
+			}
+			pastMesgIndex = (pastMesgIndex + 1) % 64
+		}
+
+		if hasEgg, _ := regexp.MatchString("(?i)\\beggs?\\b", m.Content); hasEgg || strings.Contains(m.Content, "🥚") {
+			_, err := s.ChannelMessageSend(m.ChannelID, "🥚")
+			if err != nil {
+				fmt.Println("Error sending egg message:", err)
+			}
+		}
+		if lmode, _ := regexp.MatchString("(?i)light (mode|theme)", m.Content); lmode {
+			_, err := s.ChannelMessageSend(m.ChannelID, "It's better in the dark")
+			if err != nil {
+				fmt.Println("Error sending light mode message:", err)
+			}
+		}
+		args := strings.Fields(m.Content)
+		if len(args) > 0 {
+			switch strings.ToLower(args[0]) {
+			case "items?":
+				s.ChannelMessageSend(m.ChannelID, "runic > deathcap > lich bane")
+			}
+		}
 	}
 }

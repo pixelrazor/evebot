@@ -11,67 +11,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-var (
-	commands = []*discordgo.ApplicationCommand{
-		{
-			Name:        "mute",
-			Description: "Temporarily mute a member",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionUser,
-					Name:        "member",
-					Description: "Member to mute",
-					Required:    true,
-				},
-				{
-					Type:        discordgo.ApplicationCommandOptionString,
-					Name:        "duration",
-					Description: "Duration to mute. Example: 2h5m",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "unmute",
-			Description: "Unmute a member",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionUser,
-					Name:        "member",
-					Description: "Member to unmute",
-					Required:    true,
-				},
-			},
-		},
-		{
-			Name:        "db", // TODO: subcommands for different sets of data
-			Description: "Dump the database",
-		},
-		{
-			Name:        "sinfo",
-			Description: "Get server information",
-		},
-		{
-			Name:        "minfo",
-			Description: "Get member information",
-			Options: []*discordgo.ApplicationCommandOption{
-				{
-					Type:        discordgo.ApplicationCommandOptionUser,
-					Name:        "member",
-					Description: "Member to view info for",
-				},
-			},
-		},
-	}
-	commandHandlers = map[string]func(s *discordgo.Session, i *discordgo.InteractionCreate){
-		"mute":   muteHandler,
-		"unmute": unmuteHandler,
-		"db":     dbHandler,
-		"sinfo":  sinfoHandler,
-		"minfo":  minfoHandler,
-	}
-)
-
 func sinfoHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
@@ -125,14 +64,46 @@ func sinfoHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 				URL: "attachment://thumb.png",
 			},
 			Fields: []*discordgo.MessageEmbedField{
-				{"ID", guild.ID, true},
-				{"Owner", fmt.Sprintf("%v#%v", owner.Username, owner.Discriminator), true},
-				{"Members", fmt.Sprint(guild.MemberCount), true},
-				{"Text channels", fmt.Sprint(text), true},
-				{"Voice channels", fmt.Sprint(voice), true},
-				{"Created at", created.Format("January 2, 2006"), true},
-				{"Region", guild.Region, true},
-				{"Roles", fmt.Sprint(len(guild.Roles)), true},
+				{
+					Name:   "ID",
+					Value:  guild.ID,
+					Inline: true,
+				},
+				{
+					Name:   "Owner",
+					Value:  fmt.Sprintf("%v#%v", owner.Username, owner.Discriminator),
+					Inline: true,
+				},
+				{
+					Name:   "Members",
+					Value:  fmt.Sprint(guild.MemberCount),
+					Inline: true,
+				},
+				{
+					Name:   "Text channels",
+					Value:  fmt.Sprint(text),
+					Inline: true,
+				},
+				{
+					Name:   "Voice channels",
+					Value:  fmt.Sprint(voice),
+					Inline: true,
+				},
+				{
+					Name:   "Created at",
+					Value:  created.Format("January 2, 2006"),
+					Inline: true,
+				},
+				{
+					Name:   "Region",
+					Value:  guild.Region,
+					Inline: true,
+				},
+				{
+					Name:   "Roles",
+					Value:  fmt.Sprint(len(guild.Roles)),
+					Inline: true,
+				},
 			},
 		},
 		Files: []*discordgo.File{
@@ -144,9 +115,9 @@ func sinfoHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 	for i, v := range emojis {
 		if i == 0 {
-			mesg.Embed.Fields = append(mesg.Embed.Fields, &discordgo.MessageEmbedField{"Custom emojis", v, true})
+			mesg.Embed.Fields = append(mesg.Embed.Fields, &discordgo.MessageEmbedField{Name: "Custom emojis", Value: v, Inline: true})
 		} else {
-			mesg.Embed.Fields = append(mesg.Embed.Fields, &discordgo.MessageEmbedField{"\u200b", v, true})
+			mesg.Embed.Fields = append(mesg.Embed.Fields, &discordgo.MessageEmbedField{Name: "\u200b", Value: v, Inline: true})
 		}
 
 	}
@@ -183,7 +154,7 @@ func minfoHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	})
 }
 
-func dbHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (eb *EveBot) dbHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	mem := i.Member
 	isAdmin := false
 	for _, v := range mem.Roles {
@@ -203,8 +174,8 @@ func dbHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 
 	mesg := "```\n"
-	joined := repo.GetAllJoin()
-	leave := repo.GetAllLeave()
+	joined := eb.repo.GetAllJoin()
+	leave := eb.repo.GetAllLeave()
 	dates := make([]string, 0)
 	for k := range joined {
 		dates = append(dates, k)
@@ -214,7 +185,7 @@ func dbHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		mesg += fmt.Sprintf("%v: +/- %v/%v\n", date, joined[date], leave[date])
 	}
 	mesg += "```\n"
-	muted := repo.GetAllMuted()
+	muted := eb.repo.GetAllMuted()
 	for id, until := range muted {
 		mesg += fmt.Sprintf("<@%v> %v: %v\n", id, id, until)
 	}
@@ -227,9 +198,9 @@ func dbHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	})
 }
 
-func unmuteHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (eb *EveBot) unmuteHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	user := i.ApplicationCommandData().Options[0].UserValue(s)
-	err := doUnmute(s, i.Member, user.ID)
+	err := eb.doUnmute(s, i.Member, user.ID)
 	if err != nil {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -248,7 +219,7 @@ func unmuteHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	})
 }
 
-func doUnmute(s *discordgo.Session, requester *discordgo.Member, userID string) error {
+func (eb *EveBot) doUnmute(s *discordgo.Session, requester *discordgo.Member, userID string) error {
 	isAdmin := false
 	for _, v := range requester.Roles {
 		if v == adminRole || v == modRole {
@@ -263,11 +234,11 @@ func doUnmute(s *discordgo.Session, requester *discordgo.Member, userID string) 
 	if err != nil {
 		return fmt.Errorf("failed to remove role: %w", err)
 	}
-	repo.DeleteMuted(userID)
+	eb.repo.DeleteMuted(userID)
 	return nil
 }
 
-func muteHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
+func (eb *EveBot) muteHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	user := i.ApplicationCommandData().Options[0].UserValue(s)
 	dur, err := time.ParseDuration(i.ApplicationCommandData().Options[1].StringValue())
 	if err != nil {
@@ -279,7 +250,7 @@ func muteHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		})
 	}
 
-	err = doMute(s, i.Member, user.ID, dur)
+	err = eb.doMute(s, i.Member, user.ID, dur)
 	if err != nil {
 		s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -300,7 +271,7 @@ func muteHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 
 // TODO: refactor command handling in general. logic function sshould return errors. Maybe differentiate user vs internal errors for logging?
 
-func doMute(s *discordgo.Session, requester *discordgo.Member, userID string, dur time.Duration) error {
+func (eb *EveBot) doMute(s *discordgo.Session, requester *discordgo.Member, userID string, dur time.Duration) error {
 	isAdmin := false
 	for _, v := range requester.Roles {
 		if v == adminRole || v == modRole {
@@ -312,6 +283,6 @@ func doMute(s *discordgo.Session, requester *discordgo.Member, userID string, du
 		return errors.New("you are not an admin")
 	}
 
-	muteMember(s, userID, dur)
+	eb.muteMember(s, userID, dur)
 	return nil
 }
