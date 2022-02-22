@@ -51,7 +51,6 @@ func (mr *MemoryRepo) DeleteMuted(userID string) {
 	mr.Lock()
 	defer mr.Unlock()
 	delete(mr.muted, userID)
-	return
 }
 
 func (mr *MemoryRepo) GetMuted(userID string) (time.Time, error) {
