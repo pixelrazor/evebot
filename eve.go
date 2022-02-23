@@ -382,11 +382,11 @@ func (eb *EveBot) handlers() {
 	eb.s.AddHandler(eb.handleMemberRemove())
 	eb.s.AddHandler(eb.handleMessageDelete())
 	eb.s.AddHandler(eb.handleMessageCreate())
-	eb.s.Identify.Intents = discordgo.MakeIntent(
+	eb.s.Identify.Intents = discordgo.IntentsGuilds |
 		discordgo.IntentsGuildMembers |
-			discordgo.IntentsGuildMessages |
-			discordgo.IntentsDirectMessages |
-			discordgo.IntentsGuildPresences)
+		discordgo.IntentsGuildMessages |
+		discordgo.IntentsDirectMessages |
+		discordgo.IntentsGuildPresences
 }
 
 func (eb *EveBot) run() error {
