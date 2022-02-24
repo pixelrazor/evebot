@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"encoding/base64"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -18,10 +17,11 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/pixelrazor/evebot/icon"
 )
 
 var (
-	quotes = []string{
+	Quotes = []string{
 		"Tim to feed",
 		"Moving in hels",
 		"Makng them screim",
@@ -254,34 +254,14 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 	return embed, nil
 }
 
-// getPNG returns a base6 encoded image randomly from the current dir
-// TODO: embed images
-func getPNG(random *rand.Rand) string {
-	files, _ := ioutil.ReadDir("./")
-	pngs := make([]string, 0)
-	for _, v := range files {
-		if strings.Contains(v.Name(), ".png") {
-			pngs = append(pngs, v.Name())
-		}
-	}
-	file := pngs[int64(random.Intn(len(pngs)))]
-	img, err := ioutil.ReadFile(file)
-	if err != nil {
-		log.Println("Failed to read image:", file, err)
-		return ""
-	}
-	contentType := http.DetectContentType(img)
-	base64img := base64.StdEncoding.EncodeToString(img)
-	return fmt.Sprintf("data:%s;base64,%s", contentType, base64img)
-}
-
-func changeBotIcon(s *discordgo.Session, random *rand.Rand) error {
-	_, err := s.UserUpdate("", "", "", getPNG(random), "")
+func updateIconAndStatus(s *discordgo.Session, random *rand.Rand) error {
+	encodedIcon := fmt.Sprintf("data:image/png;base64,%v", icon.EncodedFiles[icon.Filenames[random.Intn(len(icon.Filenames))]])
+	_, err := s.UserUpdate("", "", "", encodedIcon, "")
 	if err != nil {
 		return err
 	}
 	return s.UpdateStatusComplex(discordgo.UpdateStatusData{
-		Status: quotes[random.Int63()%int64(len(quotes))],
+		Status: Quotes[random.Intn(len(Quotes))],
 	})
 }
 
@@ -408,7 +388,10 @@ func (eb *EveBot) handleOnReady() interface{} {
 	return func(s *discordgo.Session, r *discordgo.Ready) {
 		go func() {
 			for {
-				changeBotIcon(eb.s, eb.random)
+				err := updateIconAndStatus(eb.s, eb.random)
+				if err != nil {
+					log.Println("Failed to update icon and status:", err)
+				}
 				<-time.After(30 * time.Minute)
 			}
 		}()
