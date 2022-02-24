@@ -50,7 +50,7 @@ var (
 	streamerRole  = "328636992999129088"
 	embedColor    = 0x8031ce
 
-	invites     []invite
+	invites     []Invite
 	invitesLock sync.Mutex
 
 	pastMessages  [64]*messageBackup
@@ -64,13 +64,6 @@ var (
 	}
 )
 
-type invite struct {
-	uses          int
-	code          string
-	name          string
-	discriminator string
-	id            string
-}
 type messageBackup struct {
 	id          string
 	channelID   string
@@ -121,11 +114,7 @@ func main() {
 	key := "Bot " + envKey
 	dg, _ := discordgo.New(key)
 
-	bot := EveBot{
-		s:      dg,
-		repo:   repo,
-		random: rand.New(rand.NewSource(time.Now().UnixNano())),
-	}
+	bot := NewEveBot(dg, repo)
 
 	bot.handlers()
 
@@ -166,33 +155,6 @@ func (eb *EveBot) mute(s *discordgo.Session, u string, d time.Duration) {
 		log.Println("Failed to remove mute role:", u, err)
 	}
 	eb.repo.DeleteMuted(u)
-}
-
-// TODO: serialize the join and leave processing
-func refreshInvites(s *discordgo.Session) {
-	for {
-		func() {
-			invitesLock.Lock()
-			defer invitesLock.Unlock()
-			ginvites, err := s.GuildInvites(guildID)
-			if err != nil {
-				fmt.Println("Error getting invites:", err)
-				return
-			}
-			newInvs := make([]invite, len(ginvites))
-			for i := range ginvites {
-				newInvs[i].code = ginvites[i].Code
-				if ginvites[i].Inviter != nil {
-					newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
-					newInvs[i].name = ginvites[i].Inviter.Username
-					newInvs[i].id = ginvites[i].Inviter.ID
-				}
-				newInvs[i].uses = ginvites[i].Uses
-			}
-			invites = newInvs
-		}()
-		<-time.After(10 * time.Minute)
-	}
 }
 
 func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.MessageEmbed, error) {
@@ -269,80 +231,24 @@ type EveBot struct {
 	s      *discordgo.Session
 	repo   DataRepository
 	random *rand.Rand
+
+	invites      map[string]InviteInfo
+	inviteEvents chan InviteEvent
+}
+
+func NewEveBot(s *discordgo.Session, repo DataRepository) *EveBot {
+	return &EveBot{
+		s:            s,
+		repo:         repo,
+		random:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		invites:      make(map[string]InviteInfo),
+		inviteEvents: make(chan InviteEvent, 4), // arbitrary number
+	}
 }
 
 type EveBotInteraction struct {
 	command *discordgo.ApplicationCommand
 	handler func(s *discordgo.Session, i *discordgo.InteractionCreate)
-}
-
-func (eb *EveBot) registeredInteractions() []EveBotInteraction {
-	return []EveBotInteraction{
-		{
-			command: &discordgo.ApplicationCommand{
-				Name:        "mute",
-				Description: "Temporarily mute a member",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:        discordgo.ApplicationCommandOptionUser,
-						Name:        "member",
-						Description: "Member to mute",
-						Required:    true,
-					},
-					{
-						Type:        discordgo.ApplicationCommandOptionString,
-						Name:        "duration",
-						Description: "Duration to mute. Example: 2h5m",
-						Required:    true,
-					},
-				},
-			},
-			handler: eb.muteHandler,
-		},
-		{
-			command: &discordgo.ApplicationCommand{
-				Name:        "unmute",
-				Description: "Unmute a member",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:        discordgo.ApplicationCommandOptionUser,
-						Name:        "member",
-						Description: "Member to unmute",
-						Required:    true,
-					},
-				},
-			},
-			handler: eb.unmuteHandler,
-		},
-		{
-			command: &discordgo.ApplicationCommand{
-				Name:        "db", // TODO: subcommands for different sets of data
-				Description: "Dump the database",
-			},
-			handler: eb.dbHandler,
-		},
-		{
-			command: &discordgo.ApplicationCommand{
-				Name:        "sinfo",
-				Description: "Get server information",
-			},
-			handler: sinfoHandler,
-		},
-		{
-			command: &discordgo.ApplicationCommand{
-				Name:        "minfo",
-				Description: "Get member information",
-				Options: []*discordgo.ApplicationCommandOption{
-					{
-						Type:        discordgo.ApplicationCommandOptionUser,
-						Name:        "member",
-						Description: "Member to view info for",
-					},
-				},
-			},
-			handler: minfoHandler,
-		},
-	}
 }
 
 func (eb *EveBot) handlers() {
@@ -358,6 +264,8 @@ func (eb *EveBot) handlers() {
 	})
 	eb.s.AddHandler(eb.handleOnReady())
 	eb.s.AddHandler(eb.handlePresenceUpdate())
+	eb.s.AddHandler(eb.handleInviteCreate())
+	eb.s.AddHandler(eb.handleInviteDelete())
 	eb.s.AddHandler(eb.handleMemberAdd())
 	eb.s.AddHandler(eb.handleMemberRemove())
 	eb.s.AddHandler(eb.handleMessageDelete())
@@ -437,86 +345,6 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 				isStreaming[p.User.ID] = time.Now()
 				break
 			}
-		}
-	}
-}
-
-func (eb *EveBot) handleMemberAdd() interface{} {
-	return func(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
-		if gma.GuildID != guildID {
-			return
-		}
-		eb.repo.IncrementJoin(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-		until, err := eb.repo.GetMuted(gma.User.ID)
-		if err == nil {
-			// TODO: reapply muted here
-			s.ChannelMessageSend(partyChannel, fmt.Sprintf("%v (%v) is a punk ass mute evader (%v remaining)", gma.User.Mention(), gma.User.ID, time.Until(until)))
-			eb.repo.DeleteMuted(gma.User.ID)
-		}
-		applyRoles(s, permanentRoles)
-		invitesLock.Lock()
-		defer invitesLock.Unlock()
-		ginvites, _ := s.GuildInvites(guildID)
-		newInvs := make([]invite, len(ginvites))
-		for i := range ginvites {
-			newInvs[i].code = ginvites[i].Code
-			if ginvites[i].Inviter != nil {
-				newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
-				newInvs[i].id = ginvites[i].Inviter.ID
-				newInvs[i].name = ginvites[i].Inviter.Username
-			} else {
-				newInvs[i].discriminator = "?"
-				newInvs[i].id = "?"
-				newInvs[i].name = "?"
-			}
-			newInvs[i].uses = ginvites[i].Uses
-		}
-		for _, new := range newInvs {
-			for _, old := range invites {
-				if old.code == new.code && old.uses+1 == new.uses {
-					_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
-					if err != nil {
-						fmt.Println("Error sending member join message:", err)
-					}
-					invites = newInvs
-					return
-				}
-			}
-		}
-		for _, new := range newInvs {
-			found := false
-			for _, old := range invites {
-				if old.code == new.code {
-					found = true
-					break
-				}
-			}
-			if !found {
-				_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
-				if err != nil {
-					fmt.Println("Error sending member join message:", err)
-				}
-				invites = newInvs
-				return
-			}
-		}
-		_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
-		if err != nil {
-			fmt.Println("Error sending member join message:", err)
-		}
-
-	}
-}
-
-func (eb *EveBot) handleMemberRemove() interface{} {
-	return func(s *discordgo.Session, gmr *discordgo.GuildMemberRemove) {
-		if gmr.GuildID != guildID {
-			return
-		}
-		eb.repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-		_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
-		if err != nil {
-			fmt.Println("Error sending member leave message:", err)
 		}
 	}
 }

@@ -11,6 +11,75 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
+func (eb *EveBot) registeredInteractions() []EveBotInteraction {
+	return []EveBotInteraction{
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "mute",
+				Description: "Temporarily mute a member",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to mute",
+						Required:    true,
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "duration",
+						Description: "Duration to mute. Example: 2h5m",
+						Required:    true,
+					},
+				},
+			},
+			handler: eb.muteHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "unmute",
+				Description: "Unmute a member",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to unmute",
+						Required:    true,
+					},
+				},
+			},
+			handler: eb.unmuteHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "db", // TODO: subcommands for different sets of data
+				Description: "Dump the database",
+			},
+			handler: eb.dbHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "sinfo",
+				Description: "Get server information",
+			},
+			handler: sinfoHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "minfo",
+				Description: "Get member information",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to view info for",
+					},
+				},
+			},
+			handler: minfoHandler,
+		},
+	}
+}
+
 func sinfoHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
