@@ -424,6 +424,7 @@ func (eb *EveBot) handleOnReady() interface{} {
 
 func (eb *EveBot) handlePresenceUpdate() interface{} {
 	isStreaming := make(map[string]time.Time)
+
 	return func(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 		member, err := GuildMember(s, p.GuildID, p.User.ID)
 		if err != nil {
@@ -442,8 +443,7 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 		}
 
 		for _, activity := range p.Activities {
-			if activity.Type == discordgo.ActivityTypeStreaming { // p.Game != nil  do i need this?
-				log.Println("Presence info:", isStreaming[p.User.ID], activity)
+			if activity.Type == discordgo.ActivityTypeStreaming {
 				if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
 					mesg := activity.Details + "\n"
 					_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
