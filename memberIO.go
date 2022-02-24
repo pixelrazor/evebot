@@ -31,13 +31,21 @@ func (eb *EveBot) processInviteEvents() {
 
 func (eb *EveBot) handleInviteCreate() interface{} {
 	return func(s *discordgo.Session, ic *discordgo.InviteCreate) {
+		fmt.Println("create:", ic.Invite)
+		fmt.Println(ic.MaxAge)
+		fmt.Println(ic.MaxUses)
+	}
+}
 
+func (eb *EveBot) handleInviteDelete() interface{} {
+	return func(s *discordgo.Session, id *discordgo.InviteDelete) {
+		fmt.Println("delete:", id)
 	}
 }
 
 func (eb *EveBot) handleMemberAdd() interface{} {
 	return func(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
-		if gma.GuildID != guildID {
+		/*if gma.GuildID != guildID {
 			return
 		}
 		eb.repo.IncrementJoin(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
@@ -51,7 +59,7 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 		invitesLock.Lock()
 		defer invitesLock.Unlock()
 		ginvites, _ := s.GuildInvites(guildID)
-		newInvs := make([]Invite, len(ginvites))
+		newInvs := make([]InviteInfo, len(ginvites))
 		for i := range ginvites {
 			newInvs[i].code = ginvites[i].Code
 			if ginvites[i].Inviter != nil {
@@ -96,8 +104,8 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 		}
 		_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
 		if err != nil {
-			fmt.Println("Error sending member join message:", err)
-		}
+			fmt.Println("Error sending member jsoin message:", err)
+		}*/
 
 	}
 }
@@ -117,7 +125,7 @@ func (eb *EveBot) handleMemberRemove() interface{} {
 
 // TODO: serialize the join and leave processing
 func refreshInvites(s *discordgo.Session) {
-	for {
+	/*for {
 		func() {
 			invitesLock.Lock()
 			defer invitesLock.Unlock()
@@ -139,5 +147,5 @@ func refreshInvites(s *discordgo.Session) {
 			invites = newInvs
 		}()
 		<-time.After(10 * time.Minute)
-	}
+	}*/
 }

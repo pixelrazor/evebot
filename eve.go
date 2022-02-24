@@ -50,7 +50,7 @@ var (
 	streamerRole  = "328636992999129088"
 	embedColor    = 0x8031ce
 
-	invites     []Invite
+	invites     []InviteInfo
 	invitesLock sync.Mutex
 
 	pastMessages  [64]*messageBackup
@@ -218,7 +218,7 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 
 func updateIconAndStatus(s *discordgo.Session, random *rand.Rand) error {
 	encodedIcon := fmt.Sprintf("data:image/png;base64,%v", icon.EncodedFiles[icon.Filenames[random.Intn(len(icon.Filenames))]])
-	_, err := s.UserUpdate("", "", "", encodedIcon, "")
+	_, err := s.UserUpdate("", encodedIcon)
 	if err != nil {
 		return err
 	}
@@ -274,7 +274,8 @@ func (eb *EveBot) handlers() {
 		discordgo.IntentsGuildMembers |
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentsDirectMessages |
-		discordgo.IntentsGuildPresences
+		discordgo.IntentsGuildPresences |
+		discordgo.IntentsGuildInvites
 }
 
 func (eb *EveBot) run() error {
