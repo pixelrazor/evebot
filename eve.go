@@ -268,7 +268,8 @@ func (eb *EveBot) handlers() {
 		discordgo.IntentsGuildMembers |
 		discordgo.IntentsGuildMessages |
 		discordgo.IntentsDirectMessages |
-		discordgo.IntentsGuildPresences
+		discordgo.IntentsGuildPresences |
+		discordgo.IntentsGuildInvites
 }
 
 func (eb *EveBot) run() error {

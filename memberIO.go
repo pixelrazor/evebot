@@ -156,7 +156,7 @@ func (eb *EveBot) handleInviteDelete() interface{} {
 
 func (eb *EveBot) handleMemberAdd() interface{} {
 	return func(s *discordgo.Session, gma *discordgo.GuildMemberAdd) {
-		if gma.GuildID != guildID {
+		/*if gma.GuildID != guildID {
 			return
 		}
 
