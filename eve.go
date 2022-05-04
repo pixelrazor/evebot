@@ -12,7 +12,6 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -49,9 +48,6 @@ var (
 	modRole       = "222406937768099840"
 	streamerRole  = "328636992999129088"
 	embedColor    = 0x8031ce
-
-	invites     []Invite
-	invitesLock sync.Mutex
 
 	pastMessages  [64]*messageBackup
 	pastMesgIndex = 0
@@ -218,7 +214,7 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 
 func updateIconAndStatus(s *discordgo.Session, random *rand.Rand) error {
 	encodedIcon := fmt.Sprintf("data:image/png;base64,%v", icon.EncodedFiles[icon.Filenames[random.Intn(len(icon.Filenames))]])
-	_, err := s.UserUpdate("", "", "", encodedIcon, "")
+	_, err := s.UserUpdate("", encodedIcon)
 	if err != nil {
 		return err
 	}
@@ -232,17 +228,15 @@ type EveBot struct {
 	repo   DataRepository
 	random *rand.Rand
 
-	invites      map[string]InviteInfo
-	inviteEvents chan InviteEvent
+	memberIOEvents chan interface{}
 }
 
 func NewEveBot(s *discordgo.Session, repo DataRepository) *EveBot {
 	return &EveBot{
-		s:            s,
-		repo:         repo,
-		random:       rand.New(rand.NewSource(time.Now().UnixNano())),
-		invites:      make(map[string]InviteInfo),
-		inviteEvents: make(chan InviteEvent, 4), // arbitrary number
+		s:              s,
+		repo:           repo,
+		random:         rand.New(rand.NewSource(time.Now().UnixNano())),
+		memberIOEvents: make(chan interface{}, 4), // arbitrary number
 	}
 }
 
@@ -303,7 +297,7 @@ func (eb *EveBot) handleOnReady() interface{} {
 				<-time.After(30 * time.Minute)
 			}
 		}()
-		go refreshInvites(s)
+		go eb.processMemberIOEvents()
 		muted := eb.repo.GetAllMuted()
 		for member, mutedUntil := range muted {
 			go eb.mute(s, member, time.Until(mutedUntil))

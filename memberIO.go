@@ -9,29 +9,148 @@ import (
 )
 
 type InviteInfo struct {
-	uses int
+	code      string
+	uses      int
+	channel   string
+	expiresAt time.Time
 	// Info about the invite creator
-	name          string
-	discriminator string
-	id            string
+	inviterName          string
+	inviterDiscriminator string
+	inviterID            string
 }
 
-type InviteEvent struct {
-	cause string
-}
+func (eb *EveBot) processMemberIOEvents() {
+	dgInvites, err := eb.s.GuildInvites(guildID)
+	if err != nil {
+		log.Fatalln("Failed to fetch invites:", err)
+	}
+	invites := invitesToMap(dgInvites)
+	for event := range eb.memberIOEvents {
+		switch event := event.(type) {
+		case *discordgo.InviteCreate:
+			invites[event.Code] = InviteInfo{
+				code:                 event.Code,
+				uses:                 event.Uses,
+				channel:              event.ChannelID,
+				expiresAt:            event.CreatedAt.Add(time.Duration(event.MaxAge) * time.Second),
+				inviterName:          event.Inviter.Username,
+				inviterDiscriminator: event.Inviter.Discriminator,
+				inviterID:            event.Inviter.ID,
+			}
+		case *discordgo.InviteDelete:
+			delete(invites, event.Code)
+		case *discordgo.GuildMemberAdd:
+			eb.repo.IncrementJoin(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
 
-func (eb *EveBot) processInviteEvents() {
-	for event := range eb.inviteEvents {
-		switch event.cause {
+			// handle some roles on join
+			until, err := eb.repo.GetMuted(event.User.ID)
+			if err == nil && time.Now().Before(until) {
+				eb.mute(eb.s, event.User.ID, time.Until(until))
+			}
+			applyRoles(eb.s, permanentRoles)
+
+			dgInvites, err := eb.s.GuildInvites(guildID)
+			if err != nil {
+				_, err := eb.s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined (error %v)", event.User.Mention(), event.User.ID, err))
+				if err != nil {
+					log.Println("Failed to send join message on invites error:", err)
+				}
+				break
+			}
+
+			currentInvites := invitesToMap(dgInvites)
+			var target *InviteInfo
+			for code, invite := range invites {
+				if invite.expiresAt.After(time.Now()) {
+					continue
+				}
+
+				currentInvite, ok := currentInvites[code]
+				if !ok {
+					target = &invite
+					break
+				}
+				if currentInvite.uses > invite.uses {
+					target = &currentInvite
+					break
+				}
+			}
+			invites = currentInvites
+
+			if target == nil {
+				_, err := eb.s.ChannelMessageSend(
+					babyChannel,
+					fmt.Sprintf("Idk how but %v (%v) joined",
+						event.User.Mention(),
+						event.User.ID))
+				if err != nil {
+					log.Println("Error sending unknown member join message:", err)
+				}
+				break
+			}
+			_, err = eb.s.ChannelMessageSend(
+				babyChannel,
+				fmt.Sprintf("%v (%v) joined using %v (<#%v>), created by %v#%v (%v) (%v uses)",
+					event.User.Mention(),
+					event.User.ID,
+					target.code,
+					target.channel,
+					target.inviterName,
+					target.inviterDiscriminator,
+					target.inviterID,
+					target.uses))
+			if err != nil {
+				log.Println("Error sending member join message:", err)
+			}
+		case *discordgo.GuildMemberRemove:
+			eb.repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
+			_, err := eb.s.ChannelMessageSend(
+				babyChannel,
+				fmt.Sprintf("%v %v#%v (%v) left",
+					event.User.Mention(),
+					event.User.Username,
+					event.User.Discriminator,
+					event.User.ID))
+			if err != nil {
+				fmt.Println("Error sending member leave message:", err)
+			}
 		default:
-			log.Println("Unknown invite event:", event.cause)
+			log.Printf("Unknown invite event: %T", event)
 		}
 	}
 }
 
+func invitesToMap(dgInvites []*discordgo.Invite) map[string]InviteInfo {
+	invites := make(map[string]InviteInfo)
+	for _, invite := range dgInvites {
+		invites[invite.Code] = InviteInfo{
+			code:                 invite.Code,
+			uses:                 invite.Uses,
+			channel:              invite.Channel.ID,
+			expiresAt:            invite.CreatedAt.Add(time.Duration(invite.MaxAge) * time.Second),
+			inviterName:          invite.Inviter.Username,
+			inviterDiscriminator: invite.Inviter.Discriminator,
+			inviterID:            invite.Inviter.ID,
+		}
+	}
+	return invites
+}
+
 func (eb *EveBot) handleInviteCreate() interface{} {
 	return func(s *discordgo.Session, ic *discordgo.InviteCreate) {
+		if ic.GuildID != guildID {
+			return
+		}
+		eb.memberIOEvents <- ic
+	}
+}
 
+func (eb *EveBot) handleInviteDelete() interface{} {
+	return func(s *discordgo.Session, id *discordgo.InviteDelete) {
+		if id.GuildID != guildID {
+			return
+		}
+		eb.memberIOEvents <- id
 	}
 }
 
@@ -40,65 +159,8 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 		if gma.GuildID != guildID {
 			return
 		}
-		eb.repo.IncrementJoin(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-		until, err := eb.repo.GetMuted(gma.User.ID)
-		if err == nil {
-			// TODO: reapply muted here
-			s.ChannelMessageSend(partyChannel, fmt.Sprintf("%v (%v) is a punk ass mute evader (%v remaining)", gma.User.Mention(), gma.User.ID, time.Until(until)))
-			eb.repo.DeleteMuted(gma.User.ID)
-		}
-		applyRoles(s, permanentRoles)
-		invitesLock.Lock()
-		defer invitesLock.Unlock()
-		ginvites, _ := s.GuildInvites(guildID)
-		newInvs := make([]Invite, len(ginvites))
-		for i := range ginvites {
-			newInvs[i].code = ginvites[i].Code
-			if ginvites[i].Inviter != nil {
-				newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
-				newInvs[i].id = ginvites[i].Inviter.ID
-				newInvs[i].name = ginvites[i].Inviter.Username
-			} else {
-				newInvs[i].discriminator = "?"
-				newInvs[i].id = "?"
-				newInvs[i].name = "?"
-			}
-			newInvs[i].uses = ginvites[i].Uses
-		}
-		for _, new := range newInvs {
-			for _, old := range invites {
-				if old.code == new.code && old.uses+1 == new.uses {
-					_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
-					if err != nil {
-						fmt.Println("Error sending member join message:", err)
-					}
-					invites = newInvs
-					return
-				}
-			}
-		}
-		for _, new := range newInvs {
-			found := false
-			for _, old := range invites {
-				if old.code == new.code {
-					found = true
-					break
-				}
-			}
-			if !found {
-				_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
-				if err != nil {
-					fmt.Println("Error sending member join message:", err)
-				}
-				invites = newInvs
-				return
-			}
-		}
-		_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
-		if err != nil {
-			fmt.Println("Error sending member join message:", err)
-		}
 
+		eb.memberIOEvents <- gma
 	}
 }
 
@@ -107,37 +169,6 @@ func (eb *EveBot) handleMemberRemove() interface{} {
 		if gmr.GuildID != guildID {
 			return
 		}
-		eb.repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
-		_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
-		if err != nil {
-			fmt.Println("Error sending member leave message:", err)
-		}
-	}
-}
-
-// TODO: serialize the join and leave processing
-func refreshInvites(s *discordgo.Session) {
-	for {
-		func() {
-			invitesLock.Lock()
-			defer invitesLock.Unlock()
-			ginvites, err := s.GuildInvites(guildID)
-			if err != nil {
-				fmt.Println("Error getting invites:", err)
-				return
-			}
-			newInvs := make([]Invite, len(ginvites))
-			for i := range ginvites {
-				newInvs[i].code = ginvites[i].Code
-				if ginvites[i].Inviter != nil {
-					newInvs[i].discriminator = ginvites[i].Inviter.Discriminator
-					newInvs[i].name = ginvites[i].Inviter.Username
-					newInvs[i].id = ginvites[i].Inviter.ID
-				}
-				newInvs[i].uses = ginvites[i].Uses
-			}
-			invites = newInvs
-		}()
-		<-time.After(10 * time.Minute)
+		eb.memberIOEvents <- gmr
 	}
 }
