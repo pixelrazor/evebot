@@ -58,7 +58,7 @@ var (
 
 	// permanentRoles holds member IDs mapped to a list of roles they should have. These roles are
 	// applied if they rejoin the server
-	// TODO: create admin api to manage this
+	// TODO: create admin api to manage this and add to db
 	permanentRoles = map[string][]string{
 		//"486817299781648385": {"519753627120828428"},
 	}
@@ -256,7 +256,7 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 
 func updateIconAndStatus(s *discordgo.Session, random *rand.Rand) error {
 	encodedIcon := fmt.Sprintf("data:image/png;base64,%v", icon.EncodedFiles[icon.Filenames[random.Intn(len(icon.Filenames))]])
-	_, err := s.UserUpdate("", "", "", encodedIcon, "")
+	_, err := s.UserUpdate("", encodedIcon)
 	if err != nil {
 		return err
 	}
@@ -276,12 +276,21 @@ type EveBotInteraction struct {
 	handler func(s *discordgo.Session, i *discordgo.InteractionCreate)
 }
 
+func commandPermissions(permissions ...int) *int64 {
+	var permission int64
+	for _, p := range permissions {
+		permission |= int64(p)
+	}
+	return &permission
+}
+
 func (eb *EveBot) registeredInteractions() []EveBotInteraction {
 	return []EveBotInteraction{
 		{
 			command: &discordgo.ApplicationCommand{
-				Name:        "mute",
-				Description: "Temporarily mute a member",
+				Name:                     "mute",
+				Description:              "Temporarily mute a member",
+				DefaultMemberPermissions: commandPermissions(discordgo.PermissionModerateMembers),
 				Options: []*discordgo.ApplicationCommandOption{
 					{
 						Type:        discordgo.ApplicationCommandOptionUser,
@@ -301,8 +310,9 @@ func (eb *EveBot) registeredInteractions() []EveBotInteraction {
 		},
 		{
 			command: &discordgo.ApplicationCommand{
-				Name:        "unmute",
-				Description: "Unmute a member",
+				Name:                     "unmute",
+				Description:              "Unmute a member",
+				DefaultMemberPermissions: commandPermissions(discordgo.PermissionModerateMembers),
 				Options: []*discordgo.ApplicationCommandOption{
 					{
 						Type:        discordgo.ApplicationCommandOptionUser,
@@ -316,8 +326,21 @@ func (eb *EveBot) registeredInteractions() []EveBotInteraction {
 		},
 		{
 			command: &discordgo.ApplicationCommand{
-				Name:        "db", // TODO: subcommands for different sets of data
-				Description: "Dump the database",
+				Name:                     "db",
+				Description:              "Dump the database",
+				DefaultMemberPermissions: commandPermissions(discordgo.PermissionModerateMembers),
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        "traffic",
+						Description: "Monthly server traffic",
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        "muted",
+						Description: "List muted users",
+					},
+				},
 			},
 			handler: eb.dbHandler,
 		},
