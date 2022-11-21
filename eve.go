@@ -9,11 +9,9 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/signal"
 	"regexp"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -133,9 +131,10 @@ func main() {
 		log.Fatalln("Failed to start bot:", err)
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "I'm alive")
+	})
+	http.ListenAndServe(":8086", nil)
 
 	log.Println("peace out")
 }
