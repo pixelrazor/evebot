@@ -9,10 +9,10 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/signal"
 	"regexp"
 	"strings"
 	"syscall"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -54,7 +54,7 @@ var (
 
 	// permanentRoles holds member IDs mapped to a list of roles they should have. These roles are
 	// applied if they rejoin the server
-	// TODO: create admin api to manage this
+	// TODO: create admin api to manage this and add to db
 	permanentRoles = map[string][]string{
 		//"486817299781648385": {"519753627120828428"},
 	}
@@ -118,9 +118,10 @@ func main() {
 		log.Fatalln("Failed to start bot:", err)
 	}
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	<-sig
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintln(w, "I'm alive")
+	})
+	http.ListenAndServe(":8086", nil)
 
 	log.Println("peace out")
 }
@@ -243,6 +244,98 @@ func NewEveBot(s *discordgo.Session, repo DataRepository) *EveBot {
 type EveBotInteraction struct {
 	command *discordgo.ApplicationCommand
 	handler func(s *discordgo.Session, i *discordgo.InteractionCreate)
+}
+
+func commandPermissions(permissions ...int) *int64 {
+	var permission int64
+	for _, p := range permissions {
+		permission |= int64(p)
+	}
+	return &permission
+}
+
+func (eb *EveBot) registeredInteractions() []EveBotInteraction {
+	return []EveBotInteraction{
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:                     "mute",
+				Description:              "Temporarily mute a member",
+				DefaultMemberPermissions: commandPermissions(discordgo.PermissionModerateMembers),
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to mute",
+						Required:    true,
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionString,
+						Name:        "duration",
+						Description: "Duration to mute. Example: 2h5m",
+						Required:    true,
+					},
+				},
+			},
+			handler: eb.muteHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:                     "unmute",
+				Description:              "Unmute a member",
+				DefaultMemberPermissions: commandPermissions(discordgo.PermissionModerateMembers),
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to unmute",
+						Required:    true,
+					},
+				},
+			},
+			handler: eb.unmuteHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:                     "db",
+				Description:              "Dump the database",
+				DefaultMemberPermissions: commandPermissions(discordgo.PermissionModerateMembers),
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        "traffic",
+						Description: "Monthly server traffic",
+					},
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        "muted",
+						Description: "List muted users",
+					},
+				},
+			},
+			handler: eb.dbHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "sinfo",
+				Description: "Get server information",
+			},
+			handler: sinfoHandler,
+		},
+		{
+			command: &discordgo.ApplicationCommand{
+				Name:        "minfo",
+				Description: "Get member information",
+				Options: []*discordgo.ApplicationCommandOption{
+					{
+						Type:        discordgo.ApplicationCommandOptionUser,
+						Name:        "member",
+						Description: "Member to view info for",
+					},
+				},
+			},
+			handler: minfoHandler,
+		},
+	}
 }
 
 func (eb *EveBot) handlers() {
