@@ -433,12 +433,6 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 	isStreaming := make(map[string]time.Time)
 
 	return func(s *discordgo.Session, p *discordgo.PresenceUpdate) {
-		for _, activity := range p.Activities {
-			if activity.Type != discordgo.ActivityTypeStreaming {
-				continue
-			}
-			log.Printf("presence: %+v\n", activity)
-		}
 		member, err := GuildMember(s, p.GuildID, p.User.ID)
 		if err != nil {
 			log.Println("Error getting member for presence update:", err)
@@ -456,7 +450,8 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 		}
 
 		for _, activity := range p.Activities {
-			if activity.Type != discordgo.ActivityTypeStreaming {
+			log.Printf("state: %q\n", activity.State)
+			if activity.Type != discordgo.ActivityTypeStreaming || activity.State != "League of Legends" {
 				continue
 			}
 			if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
