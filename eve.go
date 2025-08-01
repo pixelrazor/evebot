@@ -89,7 +89,7 @@ func main() {
 
 	var repo DataRepository
 	if *memdb {
-		fmt.Println("memory")
+		log.Println("memory")
 		repo = NewMemoryRepo()
 	} else {
 		host, ok := os.LookupEnv("DB_HOST")
@@ -126,6 +126,8 @@ func main() {
 	}
 
 	bot.handlers()
+
+	log.Println("discordgo version:", discordgo.VERSION)
 
 	if err := bot.run(); err != nil {
 		log.Fatalln("Failed to start bot:", err)
@@ -175,7 +177,7 @@ func refreshInvites(s *discordgo.Session) {
 			defer invitesLock.Unlock()
 			ginvites, err := s.GuildInvites(guildID)
 			if err != nil {
-				fmt.Println("Error getting invites:", err)
+				log.Println("Error getting invites:", err)
 				return
 			}
 			newInvs := make([]invite, len(ginvites))
@@ -198,7 +200,7 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 	created, _ := discordgo.SnowflakeTimestamp(u.ID)
 	member, err := GuildMember(s, guild, u.ID)
 	if err != nil {
-		fmt.Println("uinfo GuildMember:", err)
+		log.Println("uinfo GuildMember:", err)
 		return nil, err
 	}
 	join := member.JoinedAt
@@ -435,7 +437,7 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 			if activity.Type != discordgo.ActivityTypeStreaming {
 				continue
 			}
-			fmt.Printf("presence: %+v\n", activity)
+			log.Printf("presence: %+v\n", activity)
 		}
 		member, err := GuildMember(s, p.GuildID, p.User.ID)
 		if err != nil {
@@ -505,7 +507,7 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 				if old.code == new.code && old.uses+1 == new.uses {
 					_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
 					if err != nil {
-						fmt.Println("Error sending member join message:", err)
+						log.Println("Error sending member join message:", err)
 					}
 					invites = newInvs
 					return
@@ -523,7 +525,7 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 			if !found {
 				_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
 				if err != nil {
-					fmt.Println("Error sending member join message:", err)
+					log.Println("Error sending member join message:", err)
 				}
 				invites = newInvs
 				return
@@ -531,7 +533,7 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 		}
 		_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
 		if err != nil {
-			fmt.Println("Error sending member join message:", err)
+			log.Println("Error sending member join message:", err)
 		}
 
 	}
@@ -545,7 +547,7 @@ func (eb *EveBot) handleMemberRemove() interface{} {
 		eb.repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
 		_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
 		if err != nil {
-			fmt.Println("Error sending member leave message:", err)
+			log.Println("Error sending member leave message:", err)
 		}
 	}
 }
@@ -628,13 +630,13 @@ func (eb *EveBot) handleMessageCreate() interface{} {
 		if hasEgg, _ := regexp.MatchString("(?i)\\beggs?\\b", m.Content); hasEgg || strings.Contains(m.Content, "🥚") {
 			_, err := s.ChannelMessageSend(m.ChannelID, "🥚")
 			if err != nil {
-				fmt.Println("Error sending egg message:", err)
+				log.Println("Error sending egg message:", err)
 			}
 		}
 		if lmode, _ := regexp.MatchString("(?i)light (mode|theme)", m.Content); lmode {
 			_, err := s.ChannelMessageSend(m.ChannelID, "It's better in the dark")
 			if err != nil {
-				fmt.Println("Error sending light mode message:", err)
+				log.Println("Error sending light mode message:", err)
 			}
 		}
 		args := strings.Fields(m.Content)
