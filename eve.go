@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"math/rand"
 	"net/http"
@@ -255,7 +255,7 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 
 func updateIconAndStatus(s *discordgo.Session, random *rand.Rand) error {
 	encodedIcon := fmt.Sprintf("data:image/png;base64,%v", icon.EncodedFiles[icon.Filenames[random.Intn(len(icon.Filenames))]])
-	_, err := s.UserUpdate("", encodedIcon)
+	_, err := s.UserUpdate("", encodedIcon, "")
 	if err != nil {
 		return err
 	}
@@ -431,6 +431,12 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 	isStreaming := make(map[string]time.Time)
 
 	return func(s *discordgo.Session, p *discordgo.PresenceUpdate) {
+		for _, activity := range p.Activities {
+			if activity.Type != discordgo.ActivityTypeStreaming {
+				continue
+			}
+			fmt.Printf("presence: %+v\n", activity)
+		}
 		member, err := GuildMember(s, p.GuildID, p.User.ID)
 		if err != nil {
 			log.Println("Error getting member for presence update:", err)
@@ -448,17 +454,18 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 		}
 
 		for _, activity := range p.Activities {
-			if activity.Type == discordgo.ActivityTypeStreaming {
-				if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
-					mesg := activity.Details + "\n"
-					_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
-					if err != nil {
-						log.Println("Error sending stream message:", err)
-					}
-				}
-				isStreaming[p.User.ID] = time.Now()
-				break
+			if activity.Type != discordgo.ActivityTypeStreaming {
+				continue
 			}
+			if isStreaming[p.User.ID].IsZero() || time.Since(isStreaming[p.User.ID]) > 4*time.Hour {
+				mesg := activity.Details + "\n"
+				_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
+				if err != nil {
+					log.Println("Error sending stream message:", err)
+				}
+			}
+			isStreaming[p.User.ID] = time.Now()
+			break
 		}
 	}
 }
@@ -597,7 +604,7 @@ func (eb *EveBot) handleMessageCreate() interface{} {
 			for _, v := range m.Attachments {
 				resp, err := http.Get(v.URL)
 				if err == nil && resp.StatusCode < 300 {
-					data, err := ioutil.ReadAll(resp.Body)
+					data, err := io.ReadAll(resp.Body)
 					if err != nil {
 						resp.Body.Close()
 					}
