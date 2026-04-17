@@ -4,7 +4,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
@@ -176,14 +175,14 @@ func (pr *PostgresRepo) Close() error {
 func (pr *PostgresRepo) AddMuted(userID string, mutedUntil time.Time) {
 	_, err := pr.db.Exec("INSERT INTO muted (user_id, muted_until) VALUES ($1, $2) ON CONFLICT (user_id) DO UPDATE SET muted_until = EXCLUDED.muted_until", userID, mutedUntil)
 	if err != nil {
-		log.Println("Failed inserting muted user:", err)
+		fmt.Println("[ERROR] Failed inserting muted user:", err)
 	}
 }
 
 func (pr *PostgresRepo) DeleteMuted(userID string) {
 	_, err := pr.db.Exec("DELETE FROM muted WHERE user_id = $1", userID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.Println("Failed to delete muted user:", err)
+		fmt.Println("[ERROR] Failed to delete muted user:", err)
 	}
 }
 
@@ -200,7 +199,7 @@ func (pr *PostgresRepo) GetAllMuted() map[string]time.Time {
 	mutedUsers := make(map[string]time.Time)
 	rows, err := pr.db.Query("SELECT user_id, muted_until FROM muted")
 	if err != nil {
-		log.Println("Failed to get muted users:", err)
+		fmt.Println("[ERROR] Failed to get muted users:", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -208,14 +207,14 @@ func (pr *PostgresRepo) GetAllMuted() map[string]time.Time {
 		var mutedUntil time.Time
 		err := rows.Scan(&id, &mutedUntil)
 		if err != nil {
-			log.Println("Failed scanning muted user data:", err)
+			fmt.Println("[ERROR] Failed scanning muted user data:", err)
 			return mutedUsers
 		}
 		mutedUsers[id] = mutedUntil
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Println("Error during muted users row iteration:", err)
+		fmt.Println("[ERROR] Error during muted users row iteration:", err)
 	}
 	return mutedUsers
 }
@@ -223,7 +222,7 @@ func (pr *PostgresRepo) GetAllMuted() map[string]time.Time {
 func (pr *PostgresRepo) IncrementJoin(month string) {
 	_, err := pr.db.Exec("INSERT INTO monthly_stats (month_year, members_joined, members_left) VALUES ($1, 1, 0) ON CONFLICT (month_year) DO UPDATE SET members_joined = monthly_stats.members_joined + 1", month)
 	if err != nil {
-		log.Println("Failed to increment join count:", err)
+		fmt.Println("[ERROR] Failed to increment join count:", err)
 	}
 }
 
@@ -231,7 +230,7 @@ func (pr *PostgresRepo) GetAllJoin() map[string]int {
 	joined := make(map[string]int)
 	rows, err := pr.db.Query("SELECT month_year, members_joined FROM monthly_stats")
 	if err != nil {
-		log.Println("Failed to get join count:", err)
+		fmt.Println("[ERROR] Failed to get join count:", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -239,14 +238,14 @@ func (pr *PostgresRepo) GetAllJoin() map[string]int {
 		var count int
 		err := rows.Scan(&month, &count)
 		if err != nil {
-			log.Println("Failed scanning join count data:", err)
+			fmt.Println("[ERROR] Failed scanning join count data:", err)
 			return joined
 		}
 		joined[month] = count
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Println("Error during join count row iteration:", err)
+		fmt.Println("[ERROR] Error during join count row iteration:", err)
 	}
 	return joined
 }
@@ -254,7 +253,7 @@ func (pr *PostgresRepo) GetAllJoin() map[string]int {
 func (pr *PostgresRepo) IncrementLeave(month string) {
 	_, err := pr.db.Exec("INSERT INTO monthly_stats (month_year, members_joined, members_left) VALUES ($1, 0, 1) ON CONFLICT (month_year) DO UPDATE SET members_left = monthly_stats.members_left + 1", month)
 	if err != nil {
-		log.Println("Failed to increment leave count:", err)
+		fmt.Println("[ERROR] Failed to increment leave count:", err)
 	}
 }
 
@@ -262,7 +261,7 @@ func (pr *PostgresRepo) GetAllLeave() map[string]int {
 	leave := make(map[string]int)
 	rows, err := pr.db.Query("SELECT month_year, members_left FROM monthly_stats")
 	if err != nil {
-		log.Println("Failed to get leave count:", err)
+		fmt.Println("[ERROR] Failed to get leave count:", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
@@ -270,14 +269,14 @@ func (pr *PostgresRepo) GetAllLeave() map[string]int {
 		var count int
 		err := rows.Scan(&month, &count)
 		if err != nil {
-			log.Println("Failed scanning leave count data:", err)
+			fmt.Println("[ERROR] Failed scanning leave count data:", err)
 			return leave
 		}
 		leave[month] = count
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Println("Error during leave count row iteration:", err)
+		fmt.Println("[ERROR] Error during leave count row iteration:", err)
 	}
 	return leave
 }
@@ -285,7 +284,7 @@ func (pr *PostgresRepo) GetAllLeave() map[string]int {
 func (pr *PostgresRepo) AddTwitch(discordID, twitchID, twitchName string) {
 	_, err := pr.db.Exec("INSERT INTO streamers (discord_id, twitch_id, twitch_name) VALUES ($1, $2, $3) ON CONFLICT (discord_id) DO UPDATE SET twitch_id = EXCLUDED.twitch_id, twitch_name = EXCLUDED.twitch_name", discordID, twitchID, twitchName)
 	if err != nil {
-		log.Println("Failed inserting streamer info:", err)
+		fmt.Println("[ERROR] Failed inserting streamer info:", err)
 	}
 }
 
@@ -301,7 +300,7 @@ func (pr *PostgresRepo) GetTwitch(discordID string) (string, string, error) {
 func (pr *PostgresRepo) DeleteTwitch(discordID string) {
 	_, err := pr.db.Exec("DELETE FROM streamers WHERE discord_id = $1", discordID)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		log.Println("Failed to delete streamer info:", err)
+		fmt.Println("[ERROR] Failed to delete streamer info:", err)
 	}
 }
 
@@ -309,21 +308,21 @@ func (pr *PostgresRepo) GetAllTwitch() map[string]string {
 	streamers := make(map[string]string)
 	rows, err := pr.db.Query("SELECT discord_id, twitch_id FROM streamers")
 	if err != nil {
-		log.Println("Failed to get streamers:", err)
+		fmt.Println("[ERROR] Failed to get streamers:", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var discordID, twitchID string
 		err := rows.Scan(&discordID, &twitchID)
 		if err != nil {
-			log.Println("Failed scanning streamer data:", err)
+			fmt.Println("[ERROR] Failed scanning streamer data:", err)
 			return streamers
 		}
 		streamers[discordID] = twitchID
 	}
 
 	if err := rows.Err(); err != nil {
-		log.Println("Error during streamers row iteration:", err)
+		fmt.Println("[ERROR] Error during streamers row iteration:", err)
 	}
 	return streamers
 }

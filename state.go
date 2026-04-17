@@ -1,7 +1,7 @@
 package main
 
 import (
-	"log"
+	"fmt"
 
 	"github.com/bwmarrin/discordgo"
 )
@@ -35,7 +35,7 @@ func Guild(s *discordgo.Session, guildID string) (*discordgo.Guild, error) {
 func Role(s *discordgo.Session, guildID, roleID string) (*discordgo.Role, error) {
 	role, err := s.State.Role(guildID, roleID)
 	if err != nil {
-		log.Println("Role cache miss")
+		fmt.Println("[INFO] Role cache miss")
 		roles, err := s.GuildRoles(guildID)
 		if err != nil {
 			return nil, err

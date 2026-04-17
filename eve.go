@@ -91,7 +91,7 @@ func main() {
 
 	var repo DataRepository
 	if *memdb {
-		log.Println("memory")
+		fmt.Println("memory")
 		repo = NewMemoryRepo()
 	} else {
 		host, ok := os.LookupEnv("DB_HOST")
@@ -162,7 +162,7 @@ func main() {
 
 	bot.handlers()
 
-	log.Println("discordgo version:", discordgo.VERSION)
+	fmt.Println("[INFO] discordgo version:", discordgo.VERSION)
 
 	if err := bot.run(); err != nil {
 		log.Fatalln("Failed to start bot:", err)
@@ -174,7 +174,7 @@ func main() {
 	http.HandleFunc("/twitch/eventsub", bot.handleTwitchEventSub)
 	http.ListenAndServe(":8086", nil)
 
-	log.Println("peace out")
+	fmt.Println("[INFO] peace out")
 }
 
 func applyRoles(s *discordgo.Session, userRoles map[string][]string) {
@@ -182,7 +182,7 @@ func applyRoles(s *discordgo.Session, userRoles map[string][]string) {
 		for _, role := range roles {
 			err := s.GuildMemberRoleAdd(guildID, user, role)
 			if err != nil {
-				log.Println("applyRoles error:", user, role, err)
+				fmt.Println("[ERROR] applyRoles error:", user, role, err)
 			}
 		}
 	}
@@ -200,7 +200,7 @@ func (eb *EveBot) mute(s *discordgo.Session, u string, d time.Duration) {
 	<-time.After(d)
 	err := s.GuildMemberRoleRemove(guildID, u, muteRole)
 	if err != nil {
-		log.Println("Failed to remove mute role:", u, err)
+		fmt.Println("[ERROR] Failed to remove mute role:", u, err)
 	}
 	eb.repo.DeleteMuted(u)
 }
@@ -213,7 +213,7 @@ func refreshInvites(s *discordgo.Session) {
 			defer invitesLock.Unlock()
 			ginvites, err := s.GuildInvites(guildID)
 			if err != nil {
-				log.Println("Error getting invites:", err)
+				fmt.Println("[ERROR] Error getting invites:", err)
 				return
 			}
 			newInvs := make([]invite, len(ginvites))
@@ -236,7 +236,7 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 	created, _ := discordgo.SnowflakeTimestamp(u.ID)
 	member, err := GuildMember(s, guild, u.ID)
 	if err != nil {
-		log.Println("uinfo GuildMember:", err)
+		fmt.Println("[ERROR] uinfo GuildMember:", err)
 		return nil, err
 	}
 	join := member.JoinedAt
@@ -245,7 +245,7 @@ func uinfo(u *discordgo.User, guild string, s *discordgo.Session) (*discordgo.Me
 	for _, v := range member.Roles {
 		role, err := Role(s, guild, v)
 		if err != nil {
-			log.Println("Failed looking up role in uinfo:", err)
+			fmt.Println("[ERROR] Failed looking up role in uinfo:", err)
 			return nil, err
 		}
 		roles += role.Name + "\n"
@@ -380,6 +380,11 @@ func (eb *EveBot) registeredInteractions() []EveBotInteraction {
 						Name:        "muted",
 						Description: "List muted users",
 					},
+					{
+						Type:        discordgo.ApplicationCommandOptionSubCommand,
+						Name:        "twitch",
+						Description: "List Discord/Twitch user mappings",
+					},
 				},
 			},
 			handler: eb.dbHandler,
@@ -476,7 +481,7 @@ func (eb *EveBot) handleOnReady() interface{} {
 			for {
 				err := updateIconAndStatus(eb.s, eb.random)
 				if err != nil {
-					log.Println("Failed to update icon and status:", err)
+					fmt.Println("[ERROR] Failed to update icon and status:", err)
 				}
 				<-time.After(30 * time.Minute)
 			}
@@ -488,7 +493,7 @@ func (eb *EveBot) handleOnReady() interface{} {
 		}
 		applyRoles(s, permanentRoles)
 		eb.syncStreamers()
-		log.Println("Eve bot is ready")
+		fmt.Println("[INFO] Eve bot is ready")
 	}
 }
 
@@ -500,7 +505,7 @@ func (eb *EveBot) handleMemberUpdate() interface{} {
 		// m.Roles might not be complete or up to date in some cases. Fetch latest to be sure.
 		member, err := GuildMember(s, m.GuildID, m.User.ID)
 		if err != nil {
-			log.Println("Error getting member for handleMemberUpdate:", err)
+			fmt.Println("[ERROR] Error getting member for handleMemberUpdate:", err)
 			return
 		}
 		isStreamer := false
@@ -519,7 +524,7 @@ func (eb *EveBot) handleMemberUpdate() interface{} {
 func (eb *EveBot) syncStreamers() {
 	members, err := eb.s.GuildMembers(guildID, "", 1000)
 	if err != nil {
-		log.Println("Error getting members for syncStreamers:", err)
+		fmt.Println("[ERROR] Error getting members for syncStreamers:", err)
 		return
 	}
 
@@ -546,7 +551,7 @@ func (eb *EveBot) subscribeToStreamer(discordID, discordName string) {
 	}
 
 	callback := eb.callbackURL + "/twitch/eventsub"
-	log.Printf("Subscribing to %v (%v) with callback: %v\n", twitchName, discordID, callback)
+	fmt.Printf("[INFO] Subscribing to %v (%v) with callback: %v\n", twitchName, discordID, callback)
 	res, err := eb.twitch.CreateEventSubSubscription(&helix.EventSubSubscription{
 		Type:    helix.EventSubTypeStreamOnline,
 		Version: "1",
@@ -560,14 +565,14 @@ func (eb *EveBot) subscribeToStreamer(discordID, discordName string) {
 		},
 	})
 	if err != nil {
-		log.Printf("Failed to subscribe to streamer %v (%v): %v\n", twitchName, discordID, err)
+		fmt.Printf("[ERROR] Failed to subscribe to streamer %v (%v): %v\n", twitchName, discordID, err)
 		return
 	}
 	if res.StatusCode >= 300 {
-		log.Printf("Twitch API Error subscribing to %v (%v): %v (Status: %d)\n", twitchName, discordID, res.ErrorMessage, res.StatusCode)
+		fmt.Printf("[ERROR] Twitch API Error subscribing to %v (%v): %v (Status: %d)\n", twitchName, discordID, res.ErrorMessage, res.StatusCode)
 		return
 	}
-	log.Printf("Successfully requested Twitch subscription for %v (%v). Status: %v\n", twitchName, discordID, res.Data.EventSubSubscriptions[0].Status)
+	fmt.Printf("[INFO] Successfully requested Twitch subscription for %v (%v). Status: %v\n", twitchName, discordID, res.Data.EventSubSubscriptions[0].Status)
 }
 
 func (eb *EveBot) unsubscribeFromStreamer(discordID string) {
@@ -581,13 +586,13 @@ func (eb *EveBot) unsubscribeFromStreamer(discordID string) {
 		Status: helix.EventSubStatusEnabled,
 	})
 	if err != nil {
-		log.Println("Error getting subscriptions for unsubscribe:", err)
+		fmt.Println("[ERROR] Error getting subscriptions for unsubscribe:", err)
 		return
 	}
 	for _, sub := range resp.Data.EventSubSubscriptions {
 		if sub.Condition.BroadcasterUserID == twitchID {
 			eb.twitch.RemoveEventSubSubscription(sub.ID)
-			log.Printf("Successfully unsubscribed from %v", twitchID)
+			fmt.Printf("[INFO] Successfully unsubscribed from %v", twitchID)
 			eb.repo.DeleteTwitch(discordID)
 		}
 	}
@@ -596,13 +601,13 @@ func (eb *EveBot) unsubscribeFromStreamer(discordID string) {
 func (eb *EveBot) handleTwitchEventSub(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		log.Println("Error reading eventsub body:", err)
+		fmt.Println("[ERROR] Error reading eventsub body:", err)
 		return
 	}
 	defer r.Body.Close()
 
 	if !helix.VerifyEventSubNotification(eb.twitchSecret, r.Header, string(body)) {
-		log.Println("Invalid eventsub signature. Body:", string(body))
+		fmt.Println("[ERROR] Invalid eventsub signature. Body:", string(body))
 		w.WriteHeader(http.StatusForbidden)
 		return
 	}
@@ -619,7 +624,7 @@ func (eb *EveBot) handleTwitchEventSub(w http.ResponseWriter, r *http.Request) {
 		} `json:"subscription"`
 	}
 	if err := json.Unmarshal(body, &vals); err != nil {
-		log.Println("Error unmarshaling eventsub body:", err)
+		fmt.Println("[ERROR] Error unmarshaling eventsub body:", err)
 		return
 	}
 
@@ -631,10 +636,10 @@ func (eb *EveBot) handleTwitchEventSub(w http.ResponseWriter, r *http.Request) {
 	if vals.Subscription.Type != helix.EventSubTypeStreamOnline {
 		return
 	}
-	log.Printf("Twitch EventSub: %v is now live\n", vals.Event.BroadcasterUserName)
+	fmt.Printf("[INFO] Twitch EventSub: %v is now live\n", vals.Event.BroadcasterUserName)
 	mesg := fmt.Sprintf("%v is now live on Twitch! https://twitch.tv/%v", vals.Event.BroadcasterUserName, vals.Event.BroadcasterUserLogin)
 	if _, err = eb.s.ChannelMessageSend(streamChannel, mesg); err != nil {
-		log.Println("Error sending stream start message:", err)
+		fmt.Println("[ERROR] Error sending stream start message:", err)
 	}
 }
 
@@ -644,7 +649,7 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 	return func(s *discordgo.Session, p *discordgo.PresenceUpdate) {
 		member, err := GuildMember(s, p.GuildID, p.User.ID)
 		if err != nil {
-			log.Println("Error getting member for presence update:", err)
+			fmt.Println("[ERROR] Error getting member for presence update:", err)
 			return
 		}
 		isStreamer := false
@@ -659,7 +664,6 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 		}
 
 		for _, activity := range p.Activities {
-			log.Printf("state: %q\n", activity.State)
 			if activity.Type != discordgo.ActivityTypeStreaming || activity.State != "League of Legends" {
 				continue
 			}
@@ -670,6 +674,7 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 				// Get User ID from Twitch
 				res, err := eb.twitch.GetUsers(&helix.UsersParams{Logins: []string{login}})
 				if err == nil && len(res.Data.Users) > 0 {
+					fmt.Printf("[INFO] Mapping discord user %v (%v) to twitch user %v\n", p.User.Username, p.User.ID, p.User.Username)
 					eb.repo.AddTwitch(p.User.ID, res.Data.Users[0].ID, res.Data.Users[0].Login)
 					eb.subscribeToStreamer(p.User.ID, p.User.Username)
 				}
@@ -679,7 +684,7 @@ func (eb *EveBot) handlePresenceUpdate() interface{} {
 				mesg := activity.Details + "\n"
 				_, err := s.ChannelMessageSend(streamChannel, mesg+activity.URL)
 				if err != nil {
-					log.Println("Error sending stream message:", err)
+					fmt.Println("[ERROR] Error sending stream message:", err)
 				}
 			}
 			isStreaming[p.User.ID] = time.Now()
@@ -723,7 +728,7 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 				if old.code == new.code && old.uses+1 == new.uses {
 					_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
 					if err != nil {
-						log.Println("Error sending member join message:", err)
+						fmt.Println("[ERROR] Error sending member join message:", err)
 					}
 					invites = newInvs
 					return
@@ -741,7 +746,7 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 			if !found {
 				_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v (%v) joined using %v, created by %v#%v (%v) (%v uses)", gma.User.Mention(), gma.User.ID, new.code, new.name, new.discriminator, new.id, new.uses))
 				if err != nil {
-					log.Println("Error sending member join message:", err)
+					fmt.Println("[ERROR] Error sending member join message:", err)
 				}
 				invites = newInvs
 				return
@@ -749,7 +754,7 @@ func (eb *EveBot) handleMemberAdd() interface{} {
 		}
 		_, err = s.ChannelMessageSend(babyChannel, fmt.Sprintf("Idk how but %v (%v) joined", gma.User.Mention(), gma.User.ID))
 		if err != nil {
-			log.Println("Error sending member join message:", err)
+			fmt.Println("[ERROR] Error sending member join message:", err)
 		}
 
 	}
@@ -763,7 +768,7 @@ func (eb *EveBot) handleMemberRemove() interface{} {
 		eb.repo.IncrementLeave(fmt.Sprintf("%v/%02d", time.Now().Year(), time.Now().Month()))
 		_, err := s.ChannelMessageSend(babyChannel, fmt.Sprintf("%v %v#%v (%v) left", gmr.User.Mention(), gmr.User.Username, gmr.User.Discriminator, gmr.User.ID))
 		if err != nil {
-			log.Println("Error sending member leave message:", err)
+			fmt.Println("[ERROR] Error sending member leave message:", err)
 		}
 	}
 }
@@ -846,13 +851,13 @@ func (eb *EveBot) handleMessageCreate() interface{} {
 		if hasEgg, _ := regexp.MatchString("(?i)\\beggs?\\b", m.Content); hasEgg || strings.Contains(m.Content, "🥚") {
 			_, err := s.ChannelMessageSend(m.ChannelID, "🥚")
 			if err != nil {
-				log.Println("Error sending egg message:", err)
+				fmt.Println("[ERROR] Error sending egg message:", err)
 			}
 		}
 		if lmode, _ := regexp.MatchString("(?i)light (mode|theme)", m.Content); lmode {
 			_, err := s.ChannelMessageSend(m.ChannelID, "It's better in the dark")
 			if err != nil {
-				log.Println("Error sending light mode message:", err)
+				fmt.Println("[ERROR] Error sending light mode message:", err)
 			}
 		}
 		args := strings.Fields(m.Content)

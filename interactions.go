@@ -17,24 +17,24 @@ func sinfoHandler(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	})
 	iconImage, err := s.GuildIcon(i.GuildID)
 	if err != nil {
-		fmt.Println("sinfo GuildIcon:", err)
+		fmt.Println("[ERROR] sinfo GuildIcon:", err)
 		return
 	}
 	var buff bytes.Buffer
 	err = png.Encode(&buff, iconImage)
 	if err != nil {
-		fmt.Println("sinfo png.Encode:", err)
+		fmt.Println("[ERROR] sinfo png.Encode:", err)
 		return
 	}
 	guild, err := Guild(s, i.GuildID)
 	if err != nil {
-		fmt.Println("sinfo Guild:", err)
+		fmt.Println("[ERROR] sinfo Guild:", err)
 		return
 	}
-	fmt.Println("owner:", guild.OwnerID)
+
 	owner, err := s.User(guild.OwnerID)
 	if err != nil {
-		fmt.Println("sinfo User:", err)
+		fmt.Println("[ERROR] sinfo User:", err)
 		return
 	}
 	voice, text := 0, 0
@@ -172,6 +172,12 @@ func (eb *EveBot) dbHandler(s *discordgo.Session, i *discordgo.InteractionCreate
 		mesg += fmt.Sprintf("Total muted members: %v\n", len(muted))
 		for id, until := range muted {
 			mesg += fmt.Sprintf("<@%v> %v: %v\n", id, id, until)
+		}
+	case "twitch":
+		twitchMappings := eb.repo.GetAllTwitch()
+		mesg += fmt.Sprintf("Total mapped members: %v\n", len(twitchMappings))
+		for discordID, twitchID := range twitchMappings {
+			mesg += fmt.Sprintf("<@%v> %v: %v\n", discordID, discordID, twitchID)
 		}
 	}
 	mesg += "```\n"
